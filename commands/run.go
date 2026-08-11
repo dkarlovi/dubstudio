@@ -90,6 +90,12 @@ func All() []*console.Command {
 			Name:        "run",
 			Usage:       "Convert subtitle files to audio using ElevenLabs TTS",
 			Description: "Convert subtitle files to audio",
+			Args: []*console.Arg{
+				{
+					Name:        "file",
+					Description: "Path to the .srt or .vtt subtitle file",
+				},
+			},
 			Flags: []console.Flag{
 				&console.IntFlag{
 					Name:    "merge-lines-threshold-ms",
@@ -97,19 +103,13 @@ func All() []*console.Command {
 					Usage:   "Merge lines if same speaker and gap is below this threshold (ms)",
 				},
 			},
-			Action: func(c *console.Context) error {
-				return RunSrt11(c)
-			},
+			Action: Run,
 		},
 	}
 }
 
-func RunSrt11(c *console.Context) error {
-	if c.NArg() < 1 {
-		return console.Exit("Error: path to subtitle file is required", 1)
-	}
-	args := c.Args().Slice()
-	path := args[0]
+func Run(c *console.Context) error {
+	path := c.Args().Get("file")
 
 	config, err := readConfig(c.String("config"))
 	if err != nil {

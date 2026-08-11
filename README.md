@@ -29,7 +29,11 @@ Pre-built binaries for Linux, Windows, and Mac are available at:
 3. download the [latest release](https://github.com/dkarlovi/srt11/releases/latest) appropriate for your system and unpack somewhere
 4. from the folder where you keep your `config.yaml`, run the binary like so:
     ```sh
-    srt11 data/130_EN.vtt
+    srt11 run data/130_EN.vtt
+    ```
+    The `run` command takes a single required argument: the path to the `.srt` or `.vtt` file. If your config lives elsewhere, point at it with `-c` / `--config`:
+    ```sh
+    srt11 run --config /path/to/config.yaml data/130_EN.vtt
     ```
 5. this will process the VTT/SRT file and produce output similar to this:
     ```
@@ -107,6 +111,6 @@ The selected model is included in the generated file's cache key, so switching m
 ## Merge lines
 
 If you have multiple lines in a row spoken by the same speaker, you can merge them into line.
-You can either set the `merge_lines_threshold_ms` in the config file or use the `-m` / `--merge-lines-threshold` flag when running the program.
+You can either set the `merge_lines_threshold_ms` in the config file or use the `-m` / `--merge-lines-threshold-ms` flag when running the program. The flag takes precedence over the config file.
 
 The default is no merging.
