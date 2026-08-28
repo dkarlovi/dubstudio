@@ -60,6 +60,10 @@ type Model struct {
 	offset   int
 	speed    float32
 	ttsModel string
+	// speedOverride is set when the speed came from a per-line @speed tag
+	// rather than the speaker config. Such a line is a branch off the request
+	// stitching chain, not a link in it -- see previousIdsFor.
+	speedOverride bool
 }
 
 type Path struct {
@@ -249,6 +253,9 @@ func generatePathTemplate(root string, item *astisub.Item, model Model) Path {
 		dialog = dialog[:50]
 	}
 
+	// Everything that changes the produced audio goes into the checksum: voice
+	// ID, TTS model, effective speed (per-speaker or per-line) and the text. A
+	// cache hit is therefore just this hash plus a lookup on disk.
 	checksum := md5.Sum([]byte(model.model + model.ttsModel + fmt.Sprintf("%f", model.speed) + item.String()))
 	template := filepath.Join(root, fmt.Sprintf("%X-%s-%s.%%s.mp3", checksum[:4], model.name, dialog))
 
@@ -367,6 +374,14 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 			sub.Lines[0].Items[0].Text = dialogue
 		}
 
+		// A speaker tag may carry a per-line speed, e.g. [Matko@1.15] or, for
+		// the default speaker, [@1.15]. Split it off before looking the speaker
+		// up, so "Matko@1.15" resolves against the configured "Matko".
+		modelName, lineSpeed, hasLineSpeed, specErr := splitSpeakerSpec(modelName)
+		if specErr != nil {
+			log.Fatalf("Error in subtitle #%d: %v", i+1, specErr)
+		}
+
 		var model Model
 		if modelName != "" {
 			modelConfig, err := lookupSpeakerModel(modelName, config)
@@ -376,6 +391,14 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 			model = Model{name: modelConfig.Name, model: modelConfig.Model, offset: modelChannels[modelName], speed: modelConfig.Speed, ttsModel: resolveTTSModel(modelConfig, config)}
 		} else {
 			model = Model{name: config.Default.Name, model: config.Default.Model, offset: 0, speed: config.Default.Speed, ttsModel: resolveTTSModel(config.Default, config)}
+		}
+
+		// Applied before generatePathTemplate: the effective speed is already
+		// part of the cache checksum, so each speed of a line is its own file
+		// and every take stays on disk.
+		if hasLineSpeed {
+			model.speed = lineSpeed
+			model.speedOverride = true
 		}
 
 		item := Item{
@@ -389,6 +412,41 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 	}
 
 	return items
+}
+
+// previousIdsFor picks the request IDs this line should stitch onto.
+//
+// A line carrying a per-cue @speed override is an escape hatch rather than a
+// link in the chain: lines at the speaker's normal speed step over it, so
+// changing one line's speed never invalidates the takes that follow. Lines
+// sharing the same override chain onto each other. When nothing matching is on
+// disk we fall back to the normal-speed chain, which is what the previous
+// unconditional lookback did.
+func previousIdsFor(items []Item, item Item, want, lookback int) []string {
+	matching := make([]string, 0, want)
+	chain := make([]string, 0, want)
+
+	for i := item.Sub.Index - 1; i >= 0 && item.Sub.Index-i <= lookback; i-- {
+		id := items[i].Path.Id
+		if id == "" {
+			continue
+		}
+		if !items[i].Model.speedOverride && len(chain) < want {
+			chain = append(chain, id)
+		}
+		if items[i].Model.speedOverride == item.Model.speedOverride &&
+			items[i].Model.speed == item.Model.speed {
+			matching = append(matching, id)
+			if len(matching) == want {
+				return matching
+			}
+		}
+	}
+
+	if len(matching) > 0 {
+		return matching
+	}
+	return chain
 }
 
 func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioFile {
@@ -408,13 +466,7 @@ func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioF
 			continue
 		}
 
-		previousRequestIds := make([]string, 0)
-		for i := item.Sub.Index - 1; i >= item.Sub.Index-3; i-- {
-			if i < 0 || items[i].Path.Id == "" {
-				continue
-			}
-			previousRequestIds = append(previousRequestIds, items[i].Path.Id)
-		}
+		previousRequestIds := previousIdsFor(items, item, 3, 10)
 
 		nextRequestIds := make([]string, 0)
 		nextText := ""

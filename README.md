@@ -76,7 +76,28 @@ Each named speaker must be defined in the `config.yaml` file. The default speake
 
 ## Speed
 
-The speed of the audio can be adjusted in the config file. The default is 1.0, but you can set it to any value between 0.7 and 1.3. The speed is per speaker.
+The speed of the audio can be adjusted in the config file. The default is 1.0, but you can set it to any value between 0.7 and 1.2. The speed is per speaker.
+
+### Per-line speed
+
+A single line can override its speaker's speed by appending `@speed` to the speaker tag. This works with all three speaker forms, and with no speaker name at all for the default speaker:
+
+```
+[Matko@1.15]What do we do?
+
+<v Matko@1.15>What do we do?</v>
+
+NOTE Matko@1.15
+What do we do?
+
+[@1.15]A line for the default speaker, a little faster.
+```
+
+The speed is resolved per line in this order: the line's own `@speed`, then the speaker's `speed`, then `default.speed`, then `1.0`. A value outside 0.7-1.2 is rejected when the subtitle file is parsed, rather than being clamped silently.
+
+The effective speed is part of the cache key, so each speed of a line is kept as its own file. Both takes stay on disk and the final track is assembled from whichever speed is currently set.
+
+A line with a per-line speed is treated as a branch off [request stitching](https://elevenlabs.io/docs/eleven-api/guides/how-to/text-to-speech/request-stitching) rather than a link in the chain: lines at the speaker's normal speed step over it, so changing one line's speed does not force the rest of the file to regenerate. Consecutive lines sharing the same override stitch onto each other.
 
 ## TTS model
 

@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/asticode/go-astisub"
 )
 
 var oldRE = regexp.MustCompile(`\[(.*?)\]\s*(.+)`)
@@ -112,4 +114,124 @@ func TestKnownSpeakerNames(t *testing.T) {
 	if got := knownSpeakerNames(testConfig()); got != "Broken, Matko" {
 		t.Errorf("got %q, want %q", got, "Broken, Matko")
 	}
+}
+
+func TestSplitSpeakerSpec(t *testing.T) {
+	cases := []struct {
+		in       string
+		wantName string
+		wantSpd  float32
+		wantHas  bool
+		wantErr  string
+	}{
+		{"Matko", "Matko", 0, false, ""},
+		{"", "", 0, false, ""},
+		{"Matko@1.15", "Matko", 1.15, true, ""},
+		{" Matko @ 1.15 ", "Matko", 1.15, true, ""},
+		{"@1.15", "", 1.15, true, ""},
+		{"Matko@0.7", "Matko", 0.7, true, ""},
+		{"Matko@1.2", "Matko", 1.2, true, ""},
+		{"Matko@1", "Matko", 1.0, true, ""},
+		{"Matko@1.4", "", 0, false, "outside the supported range"},
+		{"Matko@0.5", "", 0, false, "outside the supported range"},
+		{"Matko@14", "", 0, false, "outside the supported range"},
+		{"Matko@", "", 0, false, "no speed after @"},
+		{"Matko@fast", "", 0, false, "unparseable"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			name, spd, has, err := splitSpeakerSpec(tc.in)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error %q should mention %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if name != tc.wantName || spd != tc.wantSpd || has != tc.wantHas {
+				t.Errorf("splitSpeakerSpec(%q)\n  got  name=%q speed=%v hasSpeed=%v\n  want name=%q speed=%v hasSpeed=%v",
+					tc.in, name, spd, has, tc.wantName, tc.wantSpd, tc.wantHas)
+			}
+		})
+	}
+}
+
+func stitchItem(index int, id string, speed float32, override bool) Item {
+	return Item{
+		Sub:   &astisub.Item{Index: index},
+		Path:  Path{Id: id},
+		Model: Model{speed: speed, speedOverride: override},
+	}
+}
+
+func TestPreviousIdsFor(t *testing.T) {
+	t.Run("a normal line steps over a speed-bumped neighbour", func(t *testing.T) {
+		items := []Item{
+			stitchItem(0, "id0", 1.0, false),
+			stitchItem(1, "id1", 1.0, false),
+			stitchItem(2, "bump", 1.15, true),
+			stitchItem(3, "", 1.0, false),
+		}
+		got := previousIdsFor(items, items[3], 3, 10)
+		for _, id := range got {
+			if id == "bump" {
+				t.Fatalf("normal line must not stitch onto an overridden take, got %v", got)
+			}
+		}
+		if len(got) != 2 {
+			t.Fatalf("want both normal-speed ids, got %v", got)
+		}
+	})
+
+	t.Run("consecutive bumps at the same speed chain onto each other", func(t *testing.T) {
+		items := []Item{
+			stitchItem(0, "id0", 1.0, false),
+			stitchItem(1, "bumpA", 1.15, true),
+			stitchItem(2, "", 1.15, true),
+		}
+		if got := previousIdsFor(items, items[2], 3, 10); len(got) != 1 || got[0] != "bumpA" {
+			t.Fatalf("want [bumpA], got %v", got)
+		}
+	})
+
+	t.Run("bumps at different speeds fall back to the normal chain", func(t *testing.T) {
+		items := []Item{
+			stitchItem(0, "id0", 1.0, false),
+			stitchItem(1, "bumpA", 1.05, true),
+			stitchItem(2, "", 1.15, true),
+		}
+		if got := previousIdsFor(items, items[2], 3, 10); len(got) != 1 || got[0] != "id0" {
+			t.Fatalf("want the normal-speed id, got %v", got)
+		}
+	})
+
+	t.Run("different speakers still stitch as before", func(t *testing.T) {
+		items := []Item{
+			stitchItem(0, "hana", 1.2, false),
+			stitchItem(1, "", 1.0, false),
+		}
+		if got := previousIdsFor(items, items[1], 3, 10); len(got) != 1 || got[0] != "hana" {
+			t.Fatalf("want the preceding id, got %v", got)
+		}
+	})
+
+	t.Run("nothing is invented when no ids are on disk", func(t *testing.T) {
+		items := []Item{stitchItem(0, "", 1.0, false), stitchItem(1, "", 1.0, false)}
+		if got := previousIdsFor(items, items[1], 3, 10); len(got) != 0 {
+			t.Fatalf("want no ids, got %v", got)
+		}
+	})
+
+	t.Run("the first line has no history", func(t *testing.T) {
+		items := []Item{stitchItem(0, "", 1.0, false)}
+		if got := previousIdsFor(items, items[0], 3, 10); len(got) != 0 {
+			t.Fatalf("want no ids, got %v", got)
+		}
+	})
 }
