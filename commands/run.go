@@ -106,6 +106,11 @@ func All() []*console.Command {
 					Aliases: []string{"m"},
 					Usage:   "Merge lines if same speaker and gap is below this threshold (ms)",
 				},
+				&console.IntFlag{
+					Name:    "overlap-tolerance-ms",
+					Aliases: []string{"t"},
+					Usage:   "Allow same-speaker overlaps up to this many ms without failing; the final audio is still written (0 = require no overlap, the default)",
+				},
 			},
 			Action: Run,
 		},
@@ -130,13 +135,18 @@ func Run(c *console.Context) error {
 		log.Printf("No merge threshold set, not merging lines")
 	}
 
+	overlapTolerance := time.Duration(c.Int("overlap-tolerance-ms")) * time.Millisecond
+	if overlapTolerance > 0 {
+		log.Printf("Using overlap tolerance: %s", overlapTolerance)
+	}
+
 	items := parseSubtitleFile(config, path, threshold)
 
 	client := elevenlabs.NewClient(context.Background(), config.AuthKey, 30*time.Second)
 	audioFiles := generateMissingVoiceLines(client, items)
 
 	overlapsByFirst := make(map[int]cueOverlap)
-	for _, ov := range findOverlaps(audioFiles, 0) {
+	for _, ov := range findOverlaps(audioFiles, overlapTolerance) {
 		overlapsByFirst[ov.First] = ov
 	}
 
