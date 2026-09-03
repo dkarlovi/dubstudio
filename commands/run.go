@@ -60,10 +60,19 @@ type Model struct {
 	offset   int
 	speed    float32
 	ttsModel string
-	// speedOverride is set when the speed came from a per-line @speed tag
-	// rather than the speaker config. Such a line is a branch off the request
-	// stitching chain, not a link in it -- see previousIdsFor.
-	speedOverride bool
+	// configSpeed is this speaker's speed as configured, before any per-line
+	// @speed override. isSpeedOverride derives override status by comparing
+	// against it rather than tracking a separate flag, so a line whose @speed
+	// happens to match the config doesn't spuriously count as an override.
+	configSpeed float32
+}
+
+// isSpeedOverride reports whether this line's effective speed came from a
+// per-line @speed tag rather than the speaker config. Such a line is a
+// branch off the request stitching chain, not a link in it -- see
+// previousIdsFor.
+func (m Model) isSpeedOverride() bool {
+	return m.speed != m.configSpeed
 }
 
 type Path struct {
@@ -428,17 +437,17 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 			if err != nil {
 				log.Fatalf("Error in subtitle #%d: %v", i+1, err)
 			}
-			model = Model{name: modelConfig.Name, model: modelConfig.Model, offset: modelChannels[modelName], speed: modelConfig.Speed, ttsModel: resolveTTSModel(modelConfig, config)}
+			model = Model{name: modelConfig.Name, model: modelConfig.Model, offset: modelChannels[modelName], speed: modelConfig.Speed, configSpeed: modelConfig.Speed, ttsModel: resolveTTSModel(modelConfig, config)}
 		} else {
-			model = Model{name: config.Default.Name, model: config.Default.Model, offset: 0, speed: config.Default.Speed, ttsModel: resolveTTSModel(config.Default, config)}
+			model = Model{name: config.Default.Name, model: config.Default.Model, offset: 0, speed: config.Default.Speed, configSpeed: config.Default.Speed, ttsModel: resolveTTSModel(config.Default, config)}
 		}
 
 		// Applied before generatePathTemplate: the effective speed is already
 		// part of the cache checksum, so each speed of a line is its own file
-		// and every take stays on disk.
+		// and every take stays on disk. configSpeed is left untouched so
+		// isSpeedOverride can still tell an overridden line from a normal one.
 		if hasLineSpeed {
 			model.speed = lineSpeed
-			model.speedOverride = true
 		}
 
 		item := Item{
@@ -471,10 +480,10 @@ func previousIdsFor(items []Item, item Item, want, lookback int) []string {
 		if id == "" {
 			continue
 		}
-		if !items[i].Model.speedOverride && len(chain) < want {
+		if !items[i].Model.isSpeedOverride() && len(chain) < want {
 			chain = append(chain, id)
 		}
-		if items[i].Model.speedOverride == item.Model.speedOverride &&
+		if items[i].Model.isSpeedOverride() == item.Model.isSpeedOverride() &&
 			items[i].Model.speed == item.Model.speed {
 			matching = append(matching, id)
 			if len(matching) == want {

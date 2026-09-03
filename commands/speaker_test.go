@@ -162,11 +162,38 @@ func TestSplitSpeakerSpec(t *testing.T) {
 	}
 }
 
+func TestModelIsSpeedOverride(t *testing.T) {
+	cases := []struct {
+		name        string
+		speed       float32
+		configSpeed float32
+		want        bool
+	}{
+		{"no tag: speed equals config speed", 1.0, 1.0, false},
+		{"tag differs from config speed: an override", 1.15, 1.0, true},
+		{"tag happens to equal config speed: still not an override", 1.0, 1.0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Model{speed: tc.speed, configSpeed: tc.configSpeed}
+			if got := m.isSpeedOverride(); got != tc.want {
+				t.Errorf("isSpeedOverride() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func stitchItem(index int, id string, speed float32, override bool) Item {
+	configSpeed := speed
+	if override {
+		// Any value other than speed marks this line as an override --
+		// isSpeedOverride derives override status from speed != configSpeed.
+		configSpeed = speed + 1
+	}
 	return Item{
 		Sub:   &astisub.Item{Index: index},
 		Path:  Path{Id: id},
-		Model: Model{speed: speed, speedOverride: override},
+		Model: Model{speed: speed, configSpeed: configSpeed},
 	}
 }
 
