@@ -198,7 +198,7 @@ func TestGeneratePathTemplate_PrefersNewestOnDuplicateCacheMatch(t *testing.T) {
 	item := &astisub.Item{
 		Lines: []astisub.Line{{Items: []astisub.LineItem{{Text: "hello there"}}}},
 	}
-	model := Model{model: "voice-id", name: "Matko", ttsModel: "eleven_multilingual_v2", speed: 1.0, configSpeed: 1.0}
+	model := Model{model: "voice-id", name: "Matko", ttsModel: "eleven_multilingual_v2", speed: 1.0}
 
 	// No cache files yet -- confirms the template and lets the test build
 	// matching filenames without hand-computing the checksum.
@@ -224,7 +224,7 @@ func TestGeneratePathTemplate_SingleCacheMatchUnaffected(t *testing.T) {
 	item := &astisub.Item{
 		Lines: []astisub.Line{{Items: []astisub.LineItem{{Text: "only one take"}}}},
 	}
-	model := Model{model: "voice-id", name: "Hana", ttsModel: "eleven_multilingual_v2", speed: 1.2, configSpeed: 1.2}
+	model := Model{model: "voice-id", name: "Hana", ttsModel: "eleven_multilingual_v2", speed: 1.2}
 
 	first := generatePathTemplate(dir, item, model)
 	onlyPath := fmt.Sprintf(first.Template, "only-id")

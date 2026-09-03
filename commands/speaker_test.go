@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -162,101 +163,77 @@ func TestSplitSpeakerSpec(t *testing.T) {
 	}
 }
 
-func TestModelIsSpeedOverride(t *testing.T) {
-	cases := []struct {
-		name        string
-		speed       float32
-		configSpeed float32
-		want        bool
-	}{
-		{"no tag: speed equals config speed", 1.0, 1.0, false},
-		{"tag differs from config speed: an override", 1.15, 1.0, true},
-		{"tag happens to equal config speed: still not an override", 1.0, 1.0, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := Model{speed: tc.speed, configSpeed: tc.configSpeed}
-			if got := m.isSpeedOverride(); got != tc.want {
-				t.Errorf("isSpeedOverride() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func stitchItem(index int, id string, speed float32, override bool) Item {
-	configSpeed := speed
-	if override {
-		// Any value other than speed marks this line as an override --
-		// isSpeedOverride derives override status from speed != configSpeed.
-		configSpeed = speed + 1
-	}
+func stitchItem(index int, id string) Item {
 	return Item{
-		Sub:   &astisub.Item{Index: index},
-		Path:  Path{Id: id},
-		Model: Model{speed: speed, configSpeed: configSpeed},
+		Sub:  &astisub.Item{Index: index},
+		Path: Path{Id: id},
 	}
 }
 
 func TestPreviousIdsFor(t *testing.T) {
-	t.Run("a normal line steps over a speed-bumped neighbour", func(t *testing.T) {
+	t.Run("walks straight back in timeline order", func(t *testing.T) {
 		items := []Item{
-			stitchItem(0, "id0", 1.0, false),
-			stitchItem(1, "id1", 1.0, false),
-			stitchItem(2, "bump", 1.15, true),
-			stitchItem(3, "", 1.0, false),
+			stitchItem(0, "id0"),
+			stitchItem(1, "id1"),
+			stitchItem(2, "id2"),
+			stitchItem(3, ""),
 		}
 		got := previousIdsFor(items, items[3], 3, 10)
-		for _, id := range got {
-			if id == "bump" {
-				t.Fatalf("normal line must not stitch onto an overridden take, got %v", got)
-			}
-		}
-		if len(got) != 2 {
-			t.Fatalf("want both normal-speed ids, got %v", got)
+		want := []string{"id2", "id1", "id0"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
 
-	t.Run("consecutive bumps at the same speed chain onto each other", func(t *testing.T) {
+	t.Run("an overridden line no longer breaks the chain", func(t *testing.T) {
+		// Regression guard for the real bug: two consecutive Auto-fixed lines
+		// at different @speed overrides (e.g. [@1.12] then [@1.11]) used to
+		// skip each other entirely, breaking dialogue continuity right where
+		// it mattered most.
 		items := []Item{
-			stitchItem(0, "id0", 1.0, false),
-			stitchItem(1, "bumpA", 1.15, true),
-			stitchItem(2, "", 1.15, true),
+			stitchItem(0, "hana0"),
+			stitchItem(1, "matko"),
+			stitchItem(2, "bumpA"), // e.g. [@1.12]
+			stitchItem(3, ""),      // e.g. [@1.11], asking for its previous ids
 		}
-		if got := previousIdsFor(items, items[2], 3, 10); len(got) != 1 || got[0] != "bumpA" {
-			t.Fatalf("want [bumpA], got %v", got)
+		got := previousIdsFor(items, items[3], 3, 10)
+		if len(got) == 0 || got[0] != "bumpA" {
+			t.Fatalf("want the immediately preceding line first, got %v", got)
 		}
 	})
 
-	t.Run("bumps at different speeds fall back to the normal chain", func(t *testing.T) {
+	t.Run("different speakers still stitch", func(t *testing.T) {
 		items := []Item{
-			stitchItem(0, "id0", 1.0, false),
-			stitchItem(1, "bumpA", 1.05, true),
-			stitchItem(2, "", 1.15, true),
-		}
-		if got := previousIdsFor(items, items[2], 3, 10); len(got) != 1 || got[0] != "id0" {
-			t.Fatalf("want the normal-speed id, got %v", got)
-		}
-	})
-
-	t.Run("different speakers still stitch as before", func(t *testing.T) {
-		items := []Item{
-			stitchItem(0, "hana", 1.2, false),
-			stitchItem(1, "", 1.0, false),
+			stitchItem(0, "hana"),
+			stitchItem(1, ""),
 		}
 		if got := previousIdsFor(items, items[1], 3, 10); len(got) != 1 || got[0] != "hana" {
 			t.Fatalf("want the preceding id, got %v", got)
 		}
 	})
 
+	t.Run("caps at want even with more available", func(t *testing.T) {
+		items := []Item{
+			stitchItem(0, "id0"),
+			stitchItem(1, "id1"),
+			stitchItem(2, "id2"),
+			stitchItem(3, "id3"),
+			stitchItem(4, ""),
+		}
+		if got := previousIdsFor(items, items[4], 3, 10); len(got) != 3 {
+			t.Fatalf("want 3 ids capped by `want`, got %v", got)
+		}
+	})
+
 	t.Run("nothing is invented when no ids are on disk", func(t *testing.T) {
-		items := []Item{stitchItem(0, "", 1.0, false), stitchItem(1, "", 1.0, false)}
+		items := []Item{stitchItem(0, ""), stitchItem(1, "")}
 		if got := previousIdsFor(items, items[1], 3, 10); len(got) != 0 {
 			t.Fatalf("want no ids, got %v", got)
 		}
 	})
 
 	t.Run("the first line has no history", func(t *testing.T) {
-		items := []Item{stitchItem(0, "", 1.0, false)}
+		items := []Item{stitchItem(0, "")}
 		if got := previousIdsFor(items, items[0], 3, 10); len(got) != 0 {
 			t.Fatalf("want no ids, got %v", got)
 		}

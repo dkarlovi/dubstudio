@@ -60,19 +60,6 @@ type Model struct {
 	offset   int
 	speed    float32
 	ttsModel string
-	// configSpeed is this speaker's speed as configured, before any per-line
-	// @speed override. isSpeedOverride derives override status by comparing
-	// against it rather than tracking a separate flag, so a line whose @speed
-	// happens to match the config doesn't spuriously count as an override.
-	configSpeed float32
-}
-
-// isSpeedOverride reports whether this line's effective speed came from a
-// per-line @speed tag rather than the speaker config. Such a line is a
-// branch off the request stitching chain, not a link in it -- see
-// previousIdsFor.
-func (m Model) isSpeedOverride() bool {
-	return m.speed != m.configSpeed
 }
 
 type Path struct {
@@ -511,15 +498,14 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, merge
 			if err != nil {
 				log.Fatalf("Error in subtitle #%d: %v", i+1, err)
 			}
-			model = Model{name: modelConfig.Name, model: modelConfig.Model, offset: modelChannels[modelName], speed: modelConfig.Speed, configSpeed: modelConfig.Speed, ttsModel: resolveTTSModel(modelConfig, config)}
+			model = Model{name: modelConfig.Name, model: modelConfig.Model, offset: modelChannels[modelName], speed: modelConfig.Speed, ttsModel: resolveTTSModel(modelConfig, config)}
 		} else {
-			model = Model{name: config.Default.Name, model: config.Default.Model, offset: 0, speed: config.Default.Speed, configSpeed: config.Default.Speed, ttsModel: resolveTTSModel(config.Default, config)}
+			model = Model{name: config.Default.Name, model: config.Default.Model, offset: 0, speed: config.Default.Speed, ttsModel: resolveTTSModel(config.Default, config)}
 		}
 
 		// Applied before generatePathTemplate: the effective speed is already
 		// part of the cache checksum, so each speed of a line is its own file
-		// and every take stays on disk. configSpeed is left untouched so
-		// isSpeedOverride can still tell an overridden line from a normal one.
+		// and every take stays on disk.
 		if hasLineSpeed {
 			model.speed = lineSpeed
 		}
@@ -537,39 +523,21 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, merge
 	return items
 }
 
-// previousIdsFor picks the request IDs this line should stitch onto.
-//
-// A line carrying a per-cue @speed override is an escape hatch rather than a
-// link in the chain: lines at the speaker's normal speed step over it, so
-// changing one line's speed never invalidates the takes that follow. Lines
-// sharing the same override chain onto each other. When nothing matching is on
-// disk we fall back to the normal-speed chain, which is what the previous
-// unconditional lookback did.
+// previousIdsFor picks the request IDs this line should stitch onto: the up
+// to `want` nearest preceding cues (within `lookback` positions) that have
+// already been generated, in timeline order regardless of speaker or speed.
+// Request stitching is what makes a multi-speaker dialogue sound continuous
+// rather than a set of disconnected monologues, so the chain always follows
+// the actual sequence of lines -- it never skips a line because it's a
+// different voice or carries a per-line @speed override.
 func previousIdsFor(items []Item, item Item, want, lookback int) []string {
-	matching := make([]string, 0, want)
-	chain := make([]string, 0, want)
-
-	for i := item.Sub.Index - 1; i >= 0 && item.Sub.Index-i <= lookback; i-- {
-		id := items[i].Path.Id
-		if id == "" {
-			continue
-		}
-		if !items[i].Model.isSpeedOverride() && len(chain) < want {
-			chain = append(chain, id)
-		}
-		if items[i].Model.isSpeedOverride() == item.Model.isSpeedOverride() &&
-			items[i].Model.speed == item.Model.speed {
-			matching = append(matching, id)
-			if len(matching) == want {
-				return matching
-			}
+	ids := make([]string, 0, want)
+	for i := item.Sub.Index - 1; i >= 0 && item.Sub.Index-i <= lookback && len(ids) < want; i-- {
+		if id := items[i].Path.Id; id != "" {
+			ids = append(ids, id)
 		}
 	}
-
-	if len(matching) > 0 {
-		return matching
-	}
-	return chain
+	return ids
 }
 
 func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioFile {
