@@ -1,10 +1,13 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/asticode/go-astisub"
 )
 
 func TestCanMergeCue(t *testing.T) {
@@ -133,4 +136,102 @@ three
 			}
 		}
 	})
+}
+
+func writeFileWithModTime(t *testing.T, path string, modTime time.Time) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+}
+
+func TestNewestFile(t *testing.T) {
+	dir := t.TempDir()
+	older := filepath.Join(dir, "older.mp3")
+	newer := filepath.Join(dir, "newer.mp3")
+	now := time.Now()
+	writeFileWithModTime(t, older, now.Add(-1*time.Hour))
+	writeFileWithModTime(t, newer, now)
+
+	t.Run("older listed first", func(t *testing.T) {
+		got, err := newestFile([]string{older, newer})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != newer {
+			t.Errorf("want %s, got %s", newer, got)
+		}
+	})
+
+	t.Run("newer listed first -- order must not matter", func(t *testing.T) {
+		got, err := newestFile([]string{newer, older})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != newer {
+			t.Errorf("want %s, got %s", newer, got)
+		}
+	})
+
+	t.Run("single file", func(t *testing.T) {
+		got, err := newestFile([]string{newer})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != newer {
+			t.Errorf("want %s, got %s", newer, got)
+		}
+	})
+
+	t.Run("missing file errors instead of picking blindly", func(t *testing.T) {
+		if _, err := newestFile([]string{filepath.Join(dir, "does-not-exist.mp3")}); err == nil {
+			t.Fatal("want an error for a missing file, got nil")
+		}
+	})
+}
+
+func TestGeneratePathTemplate_PrefersNewestOnDuplicateCacheMatch(t *testing.T) {
+	dir := t.TempDir()
+	item := &astisub.Item{
+		Lines: []astisub.Line{{Items: []astisub.LineItem{{Text: "hello there"}}}},
+	}
+	model := Model{model: "voice-id", name: "Matko", ttsModel: "eleven_multilingual_v2", speed: 1.0, configSpeed: 1.0}
+
+	// No cache files yet -- confirms the template and lets the test build
+	// matching filenames without hand-computing the checksum.
+	first := generatePathTemplate(dir, item, model)
+	if first.Path != "" {
+		t.Fatalf("want no cache hit yet, got %+v", first)
+	}
+
+	olderPath := fmt.Sprintf(first.Template, "older-id")
+	newerPath := fmt.Sprintf(first.Template, "newer-id")
+	now := time.Now()
+	writeFileWithModTime(t, olderPath, now.Add(-1*time.Hour))
+	writeFileWithModTime(t, newerPath, now)
+
+	got := generatePathTemplate(dir, item, model)
+	if got.Id != "newer-id" {
+		t.Errorf("want the newest cache file's id %q, got %q (path %s)", "newer-id", got.Id, got.Path)
+	}
+}
+
+func TestGeneratePathTemplate_SingleCacheMatchUnaffected(t *testing.T) {
+	dir := t.TempDir()
+	item := &astisub.Item{
+		Lines: []astisub.Line{{Items: []astisub.LineItem{{Text: "only one take"}}}},
+	}
+	model := Model{model: "voice-id", name: "Hana", ttsModel: "eleven_multilingual_v2", speed: 1.2, configSpeed: 1.2}
+
+	first := generatePathTemplate(dir, item, model)
+	onlyPath := fmt.Sprintf(first.Template, "only-id")
+	writeFileWithModTime(t, onlyPath, time.Now())
+
+	got := generatePathTemplate(dir, item, model)
+	if got.Id != "only-id" {
+		t.Errorf("want %q, got %q", "only-id", got.Id)
+	}
 }

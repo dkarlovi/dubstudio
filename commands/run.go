@@ -319,15 +319,57 @@ func generatePathTemplate(root string, item *astisub.Item, model Model) Path {
 
 	glob := fmt.Sprintf(template, "*")
 	if files, err := filepath.Glob(glob); err == nil && len(files) > 0 {
+		chosen := files[0]
+		if len(files) > 1 {
+			if newest, err := newestFile(files); err != nil {
+				log.Printf("Warning: %d cache files match %s, but could not compare mod times (%v); using %s", len(files), glob, err, filepath.Base(chosen))
+			} else {
+				log.Printf("Warning: %d cache files match %s, using the newest: %s", len(files), glob, filepath.Base(newest))
+				chosen = newest
+			}
+		}
 		// found the previously generated file, extract the ID out of it
 		re := regexp.MustCompile(`([^.]+).mp3$`)
-		match := re.FindStringSubmatch(filepath.Base(files[0]))
+		match := re.FindStringSubmatch(filepath.Base(chosen))
 		if len(match) > 1 {
-			return Path{Path: files[0], Template: template, Id: match[1]}
+			return Path{Path: chosen, Template: template, Id: match[1]}
 		}
 	}
 
 	return Path{Template: template}
+}
+
+// newestFile returns the path with the most recent modification time among
+// files, which must be non-empty. Used when a cache glob matches more than
+// one file -- e.g. a cache miss got regenerated with a new request ID while
+// an older file for the same voice+model+speed+text was never cleaned up --
+// so the most recently generated take is reused instead of glob's arbitrary
+// (not chronological) ordering silently picking a stale one.
+func newestFile(files []string) (string, error) {
+	newest := files[0]
+	newestModTime, err := fileModTime(newest)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range files[1:] {
+		modTime, err := fileModTime(f)
+		if err != nil {
+			return "", err
+		}
+		if modTime.After(newestModTime) {
+			newest = f
+			newestModTime = modTime
+		}
+	}
+	return newest, nil
+}
+
+func fileModTime(path string) (time.Time, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return info.ModTime(), nil
 }
 
 // canMergeCue reports whether the next cue may be folded into the current
