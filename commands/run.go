@@ -116,6 +116,10 @@ func All() []*console.Command {
 					Usage:   "Merge lines if same speaker and gap is below this threshold (ms)",
 				},
 				&console.IntFlag{
+					Name:  "merge-max-ms",
+					Usage: "Cap a merged cue's total window (first start to last end) to this many ms; once folding the next line in would exceed it, start a new cue instead (0 = unlimited, the default)",
+				},
+				&console.IntFlag{
 					Name:    "overlap-tolerance-ms",
 					Aliases: []string{"t"},
 					Usage:   "Allow same-speaker overlaps up to this many ms without failing; the final audio is still written (0 = require no overlap, the default)",
@@ -149,6 +153,11 @@ func Run(c *console.Context) error {
 		log.Printf("No merge threshold set, not merging lines")
 	}
 
+	mergeMaxMs := c.Int("merge-max-ms")
+	if mergeMaxMs > 0 {
+		log.Printf("Using merge max window: %dms", mergeMaxMs)
+	}
+
 	overlapTolerance := time.Duration(c.Int("overlap-tolerance-ms")) * time.Millisecond
 	if overlapTolerance > 0 {
 		log.Printf("Using overlap tolerance: %s", overlapTolerance)
@@ -159,7 +168,7 @@ func Run(c *console.Context) error {
 		log.Printf("Using cross-overlap tolerance: %dms", crossOverlapToleranceMs)
 	}
 
-	items := parseSubtitleFile(config, path, threshold)
+	items := parseSubtitleFile(config, path, threshold, mergeMaxMs)
 
 	client := elevenlabs.NewClient(context.Background(), config.AuthKey, 30*time.Second)
 	audioFiles := generateMissingVoiceLines(client, items)
@@ -321,7 +330,31 @@ func generatePathTemplate(root string, item *astisub.Item, model Model) Path {
 	return Path{Template: template}
 }
 
-func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) []Item {
+// canMergeCue reports whether the next cue may be folded into the current
+// merge group. Cross-voice cues never merge, regardless of gap or cap.
+// mergeThresholdMs caps the gap between the group's current end and the
+// next cue's start. mergeMaxMs (0 = unlimited) separately caps the total
+// window from the group's first start to the candidate end -- so a long
+// run of abutting same-voice lines still gets split into multiple cues
+// once folding the next one in would make the group too long.
+func canMergeCue(curSpeaker, nextSpeaker string, mergedStart, mergedEnd, nextStart, nextEnd time.Duration, mergeThresholdMs, mergeMaxMs int) bool {
+	if curSpeaker != nextSpeaker {
+		return false
+	}
+	gap := nextStart - mergedEnd
+	if gap < 0 || gap.Milliseconds() > int64(mergeThresholdMs) {
+		return false
+	}
+	if mergeMaxMs > 0 {
+		window := nextEnd - mergedStart
+		if window.Milliseconds() > int64(mergeMaxMs) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, mergeMaxMs int) []Item {
 	subs, err := astisub.OpenFile(path)
 	if err != nil {
 		log.Fatalf("Error parsing VTT file: %v", err)
@@ -375,8 +408,7 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 				} else {
 					nextSpeaker, _, _ = resolveSpeaker(next.String())
 				}
-				gap := next.StartAt - mergedEnd
-				if curSpeaker == nextSpeaker && gap.Milliseconds() >= 0 && gap.Milliseconds() <= int64(mergeLinesThresholdMs) {
+				if canMergeCue(curSpeaker, nextSpeaker, mergedStart, mergedEnd, next.StartAt, next.EndAt, mergeLinesThresholdMs, mergeMaxMs) {
 					// Merge: extend end time, concat text
 					mergedEnd = next.EndAt
 					mergedText = strings.TrimSpace(mergedText) + " " + strings.TrimSpace(next.String())
