@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -234,4 +235,113 @@ func TestGeneratePathTemplate_SingleCacheMatchUnaffected(t *testing.T) {
 	if got.Id != "only-id" {
 		t.Errorf("want %q, got %q", "only-id", got.Id)
 	}
+}
+
+// squareWaveAtDb builds n samples of a square wave at a given dBFS level.
+// A square wave's RMS equals its peak, which makes the expected level of
+// the fixture exact rather than approximate (unlike e.g. a sine wave).
+func squareWaveAtDb(db float64, n int) []int {
+	amplitude := int(math.Round(32768 * math.Pow(10, db/20)))
+	samples := make([]int, n)
+	for i := range samples {
+		if i%2 == 0 {
+			samples[i] = amplitude
+		} else {
+			samples[i] = -amplitude
+		}
+	}
+	return samples
+}
+
+func peakDb(samples []int) float64 {
+	peak := 0
+	for _, s := range samples {
+		abs := s
+		if abs < 0 {
+			abs = -abs
+		}
+		if abs > peak {
+			peak = abs
+		}
+	}
+	if peak == 0 {
+		return math.Inf(-1)
+	}
+	return 20 * math.Log10(float64(peak)/32768.0)
+}
+
+func TestNormalizationGain(t *testing.T) {
+	const target = -20.0
+	const tolerance = 0.5 // dB
+
+	t.Run("quiet clip is boosted toward target", func(t *testing.T) {
+		samples := squareWaveAtDb(-35, 2000)
+		gain := normalizationGain(samples, target)
+		gainDb := 20 * math.Log10(gain)
+		gotLevel := -35 + gainDb
+		if math.Abs(gotLevel-target) > tolerance {
+			t.Errorf("resulting level = %.2fdB, want ~%.2fdB", gotLevel, target)
+		}
+	})
+
+	t.Run("loud clip is attenuated toward target", func(t *testing.T) {
+		samples := squareWaveAtDb(-3, 2000)
+		gain := normalizationGain(samples, target)
+		if gain >= 1 {
+			t.Fatalf("want attenuation (gain < 1), got %v", gain)
+		}
+		gainDb := 20 * math.Log10(gain)
+		gotLevel := -3 + gainDb
+		if math.Abs(gotLevel-target) > tolerance {
+			t.Errorf("resulting level = %.2fdB, want ~%.2fdB", gotLevel, target)
+		}
+	})
+
+	t.Run("near-silent broken clip is boost-capped, not fully corrected", func(t *testing.T) {
+		// Mirrors the real near-silent cache files found in production
+		// (measured around -85 to -89dB RMS with ffmpeg astats).
+		samples := squareWaveAtDb(-85, 2000)
+		gain := normalizationGain(samples, target)
+		gainDb := 20 * math.Log10(gain)
+		if math.Abs(gainDb-normalizeMaxBoostDb) > 0.01 {
+			t.Fatalf("want gain capped at %.1fdB, got %.2fdB", normalizeMaxBoostDb, gainDb)
+		}
+		gotLevel := -85 + gainDb
+		if gotLevel >= target-1 {
+			t.Errorf("capped boost should leave the clip well short of target, got %.2fdB", gotLevel)
+		}
+	})
+
+	t.Run("ceiling prevents clipping on a peaky clip despite a low overall RMS", func(t *testing.T) {
+		// One near-full-scale sample among 999 silent ones: low RMS (which
+		// alone would ask for a big boost) but a peak already close to 0dBFS.
+		samples := make([]int, 1000)
+		samples[0] = 32000
+		gain := normalizationGain(samples, target)
+		gotPeakDb := peakDb(samples) + 20*math.Log10(gain)
+		if gotPeakDb > normalizeCeilingDb+0.01 {
+			t.Fatalf("resulting peak %.2fdB exceeds ceiling %.2fdB", gotPeakDb, normalizeCeilingDb)
+		}
+	})
+
+	t.Run("clip already at target gets ~unity gain", func(t *testing.T) {
+		samples := squareWaveAtDb(target, 2000)
+		gain := normalizationGain(samples, target)
+		if math.Abs(gain-1) > 0.1 {
+			t.Errorf("want gain close to 1, got %v", gain)
+		}
+	})
+
+	t.Run("true silence returns unity gain", func(t *testing.T) {
+		samples := make([]int, 1000)
+		if gain := normalizationGain(samples, target); gain != 1 {
+			t.Errorf("want gain 1 for silence, got %v", gain)
+		}
+	})
+
+	t.Run("empty input returns unity gain", func(t *testing.T) {
+		if gain := normalizationGain(nil, target); gain != 1 {
+			t.Errorf("want gain 1 for empty input, got %v", gain)
+		}
+	})
 }

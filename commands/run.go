@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -116,6 +117,11 @@ func All() []*console.Command {
 					Usage:        "Gate on cross-speaker overlaps past this many ms, like --overlap-tolerance-ms; cross-overlaps are always reported per-cue regardless (default -1 = report only, never fail)",
 					DefaultValue: -1,
 				},
+				&console.IntFlag{
+					Name:         "normalize-target-db",
+					Usage:        "Gain each cue toward this RMS level (dBFS) before mixing, evening out level swings between ElevenLabs generations; 0 or above disables normalization",
+					DefaultValue: -20,
+				},
 			},
 			Action: Run,
 		},
@@ -153,6 +159,13 @@ func Run(c *console.Context) error {
 	crossOverlapToleranceMs := c.Int("cross-overlap-tolerance-ms")
 	if crossOverlapToleranceMs >= 0 {
 		log.Printf("Using cross-overlap tolerance: %dms", crossOverlapToleranceMs)
+	}
+
+	normalizeTargetDb := c.Int("normalize-target-db")
+	if normalizeTargetDb < 0 {
+		log.Printf("Normalizing each cue toward %ddB RMS before mixing", normalizeTargetDb)
+	} else {
+		log.Printf("Normalization disabled")
 	}
 
 	items := parseSubtitleFile(config, path, threshold, mergeMaxMs)
@@ -243,7 +256,7 @@ func Run(c *console.Context) error {
 	}
 
 	outputPath := strings.TrimSuffix(path, filepath.Ext(path)) + "_" + time.Now().Format("2006-01-02-15-04-05") + ".wav"
-	if err := generateFinalAudioFile(audioFiles, outputPath); err != nil {
+	if err := generateFinalAudioFile(audioFiles, outputPath, float64(normalizeTargetDb)); err != nil {
 		return console.Exit(fmt.Sprintf("Error writing final audio track: %v", err), 1)
 	}
 	log.Printf("Final audio track written to %s\n", outputPath)
@@ -630,7 +643,82 @@ func readAudioFileDuration(path string) (time.Duration, error) {
 	return time.Duration(duration * float64(time.Second)), nil
 }
 
-func generateFinalAudioFile(files []AudioFile, outputPath string) error {
+// normalizeCeilingDb and normalizeMaxBoostDb bound normalizationGain: the
+// ceiling stops a gained-up clip from clipping, and the boost cap stops a
+// near-silent or broken generation (mostly noise floor, no real signal)
+// from being amplified into audible noise instead of being left as an
+// obvious outlier for manual review.
+const (
+	normalizeCeilingDb  = -1.0
+	normalizeMaxBoostDb = 24.0
+)
+
+// decodeSamples reads every sample from an mp3 decoder's left channel (the
+// mixing loop below has only ever used the left channel of the stereo PCM
+// go-mp3 decodes to, even for a mono voice source).
+func decodeSamples(decoder *mp3.Decoder) ([]int, error) {
+	samples := make([]int, 0, decoder.Length()/4)
+	tmpBuf := make([]byte, 4096)
+	for {
+		n, err := decoder.Read(tmpBuf)
+		if n > 0 {
+			for i := 0; i < n-1; i += 4 {
+				samples = append(samples, int(int16(tmpBuf[i])|int16(tmpBuf[i+1])<<8))
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return samples, nil
+}
+
+// normalizationGain computes the linear gain to bring samples' RMS level to
+// targetDb (dBFS, negative). ElevenLabs generations vary widely in level
+// from clip to clip -- gaps of 70dB+ between cues in the same track are not
+// unusual -- so mixing them unmodified leaves some lines near-inaudible and
+// others painfully loud right next to each other.
+func normalizationGain(samples []int, targetDb float64) float64 {
+	if len(samples) == 0 {
+		return 1
+	}
+
+	var sumSquares float64
+	peak := 0
+	for _, s := range samples {
+		sumSquares += float64(s) * float64(s)
+		abs := s
+		if abs < 0 {
+			abs = -abs
+		}
+		if abs > peak {
+			peak = abs
+		}
+	}
+	if peak == 0 {
+		return 1 // true silence: nothing to normalize
+	}
+
+	const fullScale = 32768.0
+	rms := math.Sqrt(sumSquares / float64(len(samples)))
+	rmsDb := 20 * math.Log10(rms/fullScale)
+	peakDb := 20 * math.Log10(float64(peak)/fullScale)
+
+	gainDb := targetDb - rmsDb
+	if gainDb > normalizeMaxBoostDb {
+		gainDb = normalizeMaxBoostDb
+	}
+	if peakDb+gainDb > normalizeCeilingDb {
+		gainDb = normalizeCeilingDb - peakDb
+	}
+
+	return math.Pow(10, gainDb/20)
+}
+
+func generateFinalAudioFile(files []AudioFile, outputPath string, normalizeTargetDb float64) error {
 	const sampleRate = 44100
 	const bitDepth = 16
 
@@ -658,40 +746,36 @@ func generateFinalAudioFile(files []AudioFile, outputPath string) error {
 	for _, file := range files {
 		path := file.Item.Path.Path
 		f, err := os.Open(path)
-		defer f.Close()
 		if err != nil {
 			return fmt.Errorf("failed to open file %s: %w", path, err)
 		}
 
 		decoder, err := mp3.NewDecoder(f)
 		if err != nil {
+			f.Close()
 			return fmt.Errorf("failed to create decoder for %s: %w", path, err)
 		}
 
+		samples, err := decodeSamples(decoder)
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read audio data from %s: %w", path, err)
+		}
+
+		gain := 1.0
+		if normalizeTargetDb < 0 {
+			gain = normalizationGain(samples, normalizeTargetDb)
+		}
+
 		startFrame := int(file.Offset.Seconds() * float64(sampleRate))
-		tmpBuf := make([]byte, 4096)
-		currentFrame := 0
-		for {
-			n, err := decoder.Read(tmpBuf)
-			if n > 0 {
-				// Process samples in pairs of bytes (16-bit samples, 2 channels)
-				for i := 0; i < n-1; i += 4 {
-					frame := startFrame + (currentFrame / 4)
-					if frame < totalFrames {
-						sample := int(int16(tmpBuf[i]) | int16(tmpBuf[i+1])<<8)
-						pos := (frame * numChannels) + file.Channel
-						if pos < len(mixBuffer.Data) {
-							mixBuffer.Data[pos] += sample
-						}
-					}
-					currentFrame += 4
-				}
-			}
-			if err == io.EOF {
+		for i, sample := range samples {
+			frame := startFrame + i
+			if frame >= totalFrames {
 				break
 			}
-			if err != nil {
-				return fmt.Errorf("failed to read audio data: %w", err)
+			pos := (frame * numChannels) + file.Channel
+			if pos < len(mixBuffer.Data) {
+				mixBuffer.Data[pos] += int(math.Round(float64(sample) * gain))
 			}
 		}
 	}
