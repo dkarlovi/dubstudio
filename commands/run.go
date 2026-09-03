@@ -111,6 +111,11 @@ func All() []*console.Command {
 					Aliases: []string{"t"},
 					Usage:   "Allow same-speaker overlaps up to this many ms without failing; the final audio is still written (0 = require no overlap, the default)",
 				},
+				&console.IntFlag{
+					Name:         "cross-overlap-tolerance-ms",
+					Usage:        "Gate on cross-speaker overlaps past this many ms, like --overlap-tolerance-ms; cross-overlaps are always reported per-cue regardless (default -1 = report only, never fail)",
+					DefaultValue: -1,
+				},
 			},
 			Action: Run,
 		},
@@ -140,24 +145,36 @@ func Run(c *console.Context) error {
 		log.Printf("Using overlap tolerance: %s", overlapTolerance)
 	}
 
+	crossOverlapToleranceMs := c.Int("cross-overlap-tolerance-ms")
+	if crossOverlapToleranceMs >= 0 {
+		log.Printf("Using cross-overlap tolerance: %dms", crossOverlapToleranceMs)
+	}
+
 	items := parseSubtitleFile(config, path, threshold)
 
 	client := elevenlabs.NewClient(context.Background(), config.AuthKey, 30*time.Second)
 	audioFiles := generateMissingVoiceLines(client, items)
 
-	overlapsByFirst := make(map[int]cueOverlap)
-	for _, ov := range findOverlaps(audioFiles, overlapTolerance) {
-		overlapsByFirst[ov.First] = ov
+	overlapsByFirst, overlaps := annotateOverlaps(audioFiles, findOverlaps(audioFiles, overlapTolerance))
+
+	// Cross-overlaps are always reported per-cue at tolerance 0, regardless of
+	// whether they gate the run.
+	crossOverlapsByFirst, _ := annotateOverlaps(audioFiles, findCrossOverlaps(audioFiles, 0))
+
+	var crossOverlaps []AudioFile
+	if crossOverlapToleranceMs >= 0 {
+		crossTolerance := time.Duration(crossOverlapToleranceMs) * time.Millisecond
+		_, crossOverlaps = annotateOverlaps(audioFiles, findCrossOverlaps(audioFiles, crossTolerance))
 	}
 
-	overlaps := make([]AudioFile, 0)
 	for i, file := range audioFiles {
 		fileEndAt := file.Offset + file.Duration
 		var overlapText string
 		if ov, ok := overlapsByFirst[i]; ok {
-			file.Overlap = ov.Duration
-			overlapText = fmt.Sprintf(" (<fg=yellow>OVERLAP %s</>)", file.Overlap.Round(time.Millisecond))
-			overlaps = append(overlaps, file)
+			overlapText += fmt.Sprintf(" (<fg=yellow>OVERLAP %s</>)", ov.Duration.Round(time.Millisecond))
+		}
+		if ov, ok := crossOverlapsByFirst[i]; ok {
+			overlapText += fmt.Sprintf(" (<fg=cyan>CROSS-OVERLAP %s</>)", ov.Duration.Round(time.Millisecond))
 		}
 
 		fmt.Fprintf(c.App.Writer,
@@ -203,6 +220,19 @@ func Run(c *console.Context) error {
 				overlap.Item.Sub.String(),
 			)
 		}
+	}
+	if len(crossOverlaps) > 0 {
+		fmt.Fprintf(c.App.Writer, "<fg=cyan>Cross-overlaps detected:</>\n")
+		for _, overlap := range crossOverlaps {
+			fmt.Fprintf(c.App.Writer,
+				"#%03d <fg=cyan>%s</>\n<info>%s</>\n\n",
+				overlap.Item.Sub.Index+1,
+				overlap.Overlap.Round(time.Millisecond),
+				overlap.Item.Sub.String(),
+			)
+		}
+	}
+	if len(overlaps) > 0 || len(crossOverlaps) > 0 {
 		fmt.Fprintf(c.App.Writer, "Fix and rerun the script to generate the final audio file.\n")
 		os.Exit(1)
 	}
