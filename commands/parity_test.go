@@ -41,8 +41,9 @@ func TestParitySummary_EmitsDeterministicCuePayload(t *testing.T) {
 	}
 
 	var got struct {
-		Cues                []map[string]any `json:"cues"`
-		MidCueTagViolations []map[string]any `json:"mid_cue_tag_violations"`
+		Cues                   []map[string]any `json:"cues"`
+		MidCueTagViolations    []map[string]any `json:"mid_cue_tag_violations"`
+		MechanicalCleanupEdits []map[string]any `json:"mechanical_cleanup_edits"`
 	}
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("json.Unmarshal() failed: %v", err)
@@ -64,6 +65,43 @@ func TestParitySummary_EmitsDeterministicCuePayload(t *testing.T) {
 	}
 	if len(got.MidCueTagViolations) != 0 {
 		t.Fatalf("want no violations, got %v", got.MidCueTagViolations)
+	}
+	if len(got.MechanicalCleanupEdits) != 0 {
+		t.Fatalf("want no cleanup edits, got %v", got.MechanicalCleanupEdits)
+	}
+}
+
+func TestParitySummary_IncludesMechanicalCleanupEdits(t *testing.T) {
+	items := []Item{
+		{
+			Sub: &astisub.Item{
+				Index:   0,
+				StartAt: 0,
+				EndAt:   2 * time.Second,
+				Lines: []astisub.Line{{
+					Items: []astisub.LineItem{{Text: "So, um, this is, you know, a test."}},
+				}},
+			},
+			Model: Model{name: "Hana", model: "voice-h", speed: 1.0},
+		},
+	}
+
+	payload, err := paritySummary(items, nil)
+	if err != nil {
+		t.Fatalf("paritySummary() returned error: %v", err)
+	}
+
+	var got struct {
+		MechanicalCleanupEdits []map[string]any `json:"mechanical_cleanup_edits"`
+	}
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("json.Unmarshal() failed: %v", err)
+	}
+	if len(got.MechanicalCleanupEdits) != 1 {
+		t.Fatalf("want 1 edit, got %d: %v", len(got.MechanicalCleanupEdits), got.MechanicalCleanupEdits)
+	}
+	if got.MechanicalCleanupEdits[0]["after"] != "This is, a test." {
+		t.Fatalf("after = %v, want %q", got.MechanicalCleanupEdits[0]["after"], "This is, a test.")
 	}
 }
 

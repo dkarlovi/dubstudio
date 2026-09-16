@@ -14,12 +14,14 @@ import (
 
 func paritySummary(items []Item, violations []TagViolation) ([]byte, error) {
 	cues := make([]map[string]any, 0, len(items))
+	texts := make([]string, 0, len(items))
 	for _, item := range items {
 		if item.Sub == nil {
 			continue
 		}
 
 		text := strings.TrimSpace(item.Sub.String())
+		texts = append(texts, text)
 		entry := map[string]any{
 			"index":       item.Sub.Index + 1,
 			"speaker":     item.Model.name,
@@ -42,9 +44,20 @@ func paritySummary(items []Item, violations []TagViolation) ([]byte, error) {
 		})
 	}
 
+	cleanupEdits := mechanicalCleanup(texts)
+	cleanupEntries := make([]map[string]any, 0, len(cleanupEdits))
+	for _, e := range cleanupEdits {
+		cleanupEntries = append(cleanupEntries, map[string]any{
+			"index":  e.Index,
+			"before": e.Before,
+			"after":  e.After,
+		})
+	}
+
 	payload := map[string]any{
-		"cues":                   cues,
-		"mid_cue_tag_violations": violationEntries,
+		"cues":                     cues,
+		"mid_cue_tag_violations":   violationEntries,
+		"mechanical_cleanup_edits": cleanupEntries,
 	}
 	return json.MarshalIndent(payload, "", "  ")
 }
