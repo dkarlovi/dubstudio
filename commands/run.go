@@ -153,6 +153,27 @@ func All() []*console.Command {
 			},
 			Action: runParity,
 		},
+		{
+			Name:        "autofix-parity",
+			Usage:       "Run dub-studio's auto-fix scheduling policy against JSON cues for migration parity checks",
+			Description: "Read cues + policy config as JSON, run AutoFixDurations, and write a JSON result for parity validation against the Python PoC",
+			Flags: []console.Flag{
+				&console.StringFlag{
+					Name:  "cues",
+					Usage: "Path to a JSON array of input cues ({index,start_ms,end_ms,voice,speed,audio_ms,overlap_flagged})",
+				},
+				&console.StringFlag{
+					Name:  "autofix-config",
+					Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps})",
+				},
+				&console.StringFlag{
+					Name:         "out-dir",
+					Usage:        "Directory to write the autofix parity summary JSON into",
+					DefaultValue: ".",
+				},
+			},
+			Action: runAutoFixParity,
+		},
 	}
 }
 
