@@ -1,4 +1,4 @@
-module github.com/dkarlovi/srt11
+module github.com/dkarlovi/dubstudio
 
 go 1.23.0
 
