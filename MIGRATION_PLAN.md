@@ -428,29 +428,62 @@ reasoning but adapted from report-text scraping to direct struct access.
 
 CLI commands: `session-upload`, `session-cleanup`, `session-generate`,
 `session-autofix`, `session-export`, `session-update-cue`, `session-show`,
-`session-reset` (`commands/session_cli.go`). Live-verified end-to-end for
-every network-free step (upload, cleanup, autofix, update-cue, show,
-reset), including state persisting correctly across separate process
-invocations and mid-cue tag violations correctly blocking upload.
-Generate/Export reuse the engine's existing, already-tested network path
-as thin glue; their pure decision logic is unit-tested with constructed
-fixtures, but the actual ElevenLabs-calling path has not been
-live-verified end-to-end in this session (would need a real API key from
-`~/dubbing/config.yaml`).
+`session-reset` (`commands/session_cli.go`).
+
+**HTTP API (section 8 item 11) — done, live-verified against the real,
+unmodified frontend.** `commands/http.go` is a route-for-route equivalent
+of dub-studio's `app.py` (GET `/session`, POST `/upload`/`/cleanup`/
+`/generate`/`/autofix`/`/cue/{index}`/`/export`, GET `/export/download`,
+POST `/reset`, plus `/` and `/static/` when `--static-dir` is given),
+minus `/reduce` (still deliberately excluded, see below). New `serve` CLI
+command. Depends only on `Service`/`SessionStore`, not on `LocalService`/
+`FileSessionStore` concretely -- realizing the whole point of building
+those as interfaces in the previous milestone. Response shape is adapted
+at this transport boundary (`cueDTO`/`sessionDTO`) to exactly match what
+`~/dub-studio/static/index.html` already expects (lowercase `voice` for
+its hardcoded matko/hana check, tolerance-gated `flagged`/`est_flagged`/
+`dirty` per cue, `first_pass_report` for phase detection, `cap`/`mode`/
+`tolerance_ms`), kept separate from the CLI's own simpler DTO -- one
+domain model, two transport-specific shapes. `Session.FirstPassReport`
+added; `Session.Flagged` now takes an explicit `toleranceMs` (dub-studio's
+core.py treats the overlap-gating tolerance and the "is this cue flagged"
+threshold as literally the same constant).
+
+Live-verified end-to-end with Playwright driving the actual unmodified
+`static/index.html` against this server (no Playwright MCP tool was
+available; installed the `playwright` npm package + Chromium into a
+scratch prefix to dodge a broken global npm cache, per Matko's "we'll use
+playwright" direction): upload -> cleanup -> generate (real ElevenLabs,
+`sample_205.vtt`, 7 merged cues billed, overlap correctly detected) ->
+autofix (correct speed bumps and basket reasoning, byte-for-byte matching
+the ported logic) -> edited the two basketed lines via the real "edit
+this line" UI flow -> re-generate (only the 4 dirty cues re-billed) ->
+autofix again (surfaced a genuine ElevenLabs speed-parameter nonlinearity:
+a cue needed further speeding after regenerating at its already-bumped
+speed -- expected iterative behavior the loop phase exists for, not a
+bug) -> one more edit+regenerate round -> export -> downloaded a valid
+4.1MB stereo 16-bit 44.1kHz WAV with correct headers via `/export/download`.
+One real bug found and fixed during this verification: dead code in
+`handleUpload` checked a header that was never set instead of using
+`save()`'s own return value.
 
 Deliberately not ported:
 - `reduce_text` (AI-assisted line shortening) -- an LLM call, not
   deterministic business logic, so it doesn't fit this plan's
   byte-identical parity model. Stays a Python/app-layer concern (or a
-  future Go feature designed on its own terms, not a port).
+  future Go feature designed on its own terms, not a port). `/reduce`
+  correspondingly does not exist on the new HTTP API.
 
 Not yet started:
-- The Flask `app.py` routes themselves as an actual HTTP/`/api` server
-  (section 8 item 11) -- the `Service` interface above is designed to make
-  this a thin transport wrapper when it happens, but no HTTP layer exists
-  yet.
-- Live, credit-spending end-to-end verification of session-generate/
-  session-export against real ElevenLabs.
 - Retiring the PoC's own `app.py`/`core.py` orchestration in favor of
-  this one (section 11) -- premature until the above is verified and, if
-  wanted, an HTTP layer exists.
+  this one (section 11) -- the new HTTP API is proven to work standalone,
+  but dub-studio itself hasn't been switched over to point at it yet.
+- A known pre-existing UI quirk, faithfully reproduced rather than fixed:
+  the frontend's Export button gates on a cue's `flagged` count (overage
+  against its own subtitle *window*), not just real overlaps/basket
+  state, so a cue that's fine by auto-fix's *real budget* metric but
+  still over its own window can leave Export disabled in the UI even
+  though the `/export` endpoint itself has nothing blocking it (verified
+  directly: exported and downloaded successfully via the API in exactly
+  that state). This is original `app.py`/`index.html` behavior, not
+  something introduced by the port.
