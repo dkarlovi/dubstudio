@@ -387,11 +387,70 @@ Ported features:
      business logic, so it doesn't fit this plan's byte-identical parity
      model. It stays a Python/app-layer concern.
 
-Not yet ported (real gaps, next candidates in rough priority order):
-- Nothing else deterministic and pure remains unported in `core.py`
-  outside the orchestration layer below.
-- `Session`/`save`/`load`, `generate_cues`, `export_audio`, and the Flask
-  `app.py` routes: the actual CLI-compat/HTTP-server/E2E work (section 8
-  items 10-13). This is a genuine design effort (API surface, session
-  state model), not a straight port of an existing pure function --
-  needs its own planning pass before starting.
+4. **cueTagLine / writeSessionVTT (session cue re-serialization)** — done.
+   - PoC source: `core._cue_tag_line`/`core._ms_to_vtt_ts`/`core.write_srt11_vtt`,
+     tested by `tests/test_srt11_io.py` (`TestCueTagLine`, `TestMsToVttTs`,
+     `TestWriteSrt11Vtt`).
+   - Go test: `TestCueTagLine`/`TestMsToVTTTimestamp`/`TestWriteSessionVTT`
+     (`commands/sessionvtt_test.go`).
+   - Go implementation: `cueTagLine`/`msToVTTTimestamp`/`writeSessionVTT`
+     (`commands/sessionvtt.go`) -- generalized from Python's hardcoded
+     matko/hana pair to an arbitrary configured default speaker name,
+     since the engine already supports arbitrary speaker names.
+   - Parity bridge: none yet (no PoC test drives this through the real
+     binary); the ported unit tests reproduce the PoC's exact fixtures
+     and expected byte output directly.
+   - Known exceptions: none.
+
+**Files-first orchestration service (section 8 items 10-11, started).**
+Built the app-level orchestration layer dub-studio's `app.py`/`core.py`
+currently provide (upload -> cleanup -> generate -> autofix -> export) as
+a `Service` interface with a `LocalService` implementation, calling the
+engine's own parsing/generation/overlap-detection/mixing functions
+in-process instead of shelling out to a separately-built binary and
+regex-scraping its printed report. Session state persists through a
+`SessionStore` interface (`FileSessionStore`, JSON file per session). Both
+interfaces exist specifically so an HTTP/API layer, or a different storage
+backend, can be swapped in later without touching callers -- per-session
+policy (merge/overlap/normalize/run-cap/autofix knobs) is threaded through
+`ServiceConfig` rather than hardcoded, for the same reason.
+
+New domain model: `Session`/`SessionCue` (`commands/session.go`, JSON-tagged
+throughout for a consistent API-ready shape), built from a subtitle file by
+`NewSessionFromSubtitleFile`/`sessionCuesFromSubtitles` (`commands/upload.go`,
+generalizes `core.parse_vtt`'s hardcoded voice detection to the engine's own
+config-driven speaker resolution, and -- since the engine already supports
+it -- honors an authored per-line `[Name@speed]` tag at upload time instead
+of silently ignoring it the way Python's simplified parser does).
+`rebuildCuesAfterGenerate` (`commands/generate.go`) collapses a merged group
+of cues into one post-generate, ported from `core._cues_from_report`'s
+reasoning but adapted from report-text scraping to direct struct access.
+
+CLI commands: `session-upload`, `session-cleanup`, `session-generate`,
+`session-autofix`, `session-export`, `session-update-cue`, `session-show`,
+`session-reset` (`commands/session_cli.go`). Live-verified end-to-end for
+every network-free step (upload, cleanup, autofix, update-cue, show,
+reset), including state persisting correctly across separate process
+invocations and mid-cue tag violations correctly blocking upload.
+Generate/Export reuse the engine's existing, already-tested network path
+as thin glue; their pure decision logic is unit-tested with constructed
+fixtures, but the actual ElevenLabs-calling path has not been
+live-verified end-to-end in this session (would need a real API key from
+`~/dubbing/config.yaml`).
+
+Deliberately not ported:
+- `reduce_text` (AI-assisted line shortening) -- an LLM call, not
+  deterministic business logic, so it doesn't fit this plan's
+  byte-identical parity model. Stays a Python/app-layer concern (or a
+  future Go feature designed on its own terms, not a port).
+
+Not yet started:
+- The Flask `app.py` routes themselves as an actual HTTP/`/api` server
+  (section 8 item 11) -- the `Service` interface above is designed to make
+  this a thin transport wrapper when it happens, but no HTTP layer exists
+  yet.
+- Live, credit-spending end-to-end verification of session-generate/
+  session-export against real ElevenLabs.
+- Retiring the PoC's own `app.py`/`core.py` orchestration in favor of
+  this one (section 11) -- premature until the above is verified and, if
+  wanted, an HTTP layer exists.
