@@ -13,6 +13,104 @@ Important operating assumptions:
 
 ---
 
+## Handoff summary — read this first
+
+Everything in this section is current as of the last commit below. If it
+disagrees with sections 1-13 further down, trust this section and the
+progress log (section 14) — sections 1-13 are the *original* plan
+written before any of it was executed, and some of it (mainly section
+8's execution order) turned out to be wrong in ways the progress log
+corrects. Read this section, skim the progress log, then start work —
+you shouldn't need sections 1-13 for anything except historical rationale.
+
+**Branch:** `feat/dubstudio-migration`, 10 commits ahead of `upstream/main`
+(`dacd1a4`, i.e. `dkarlovi/dubstudio` post-PR-#50-post-rename — see
+CLAUDE.local.md's "Branch policy" for how that upstream history got
+there). Latest commit `b069adf`. **Not pushed anywhere, no PR opened.**
+Nothing on `origin` corresponds to it.
+
+**What's done, each with Go tests and (except item 4) a PoC-side parity
+bridge test — see section 14 below for exact file names per feature:**
+
+1. Parity bridge infrastructure: `parity` and `autofix-parity` CLI
+   commands, so the Python PoC's test suite can shell out to the real
+   Go binary and assert byte-for-byte agreement.
+2. Four ported PoC business-logic features: mid-cue speaker-tag
+   violation detection, mechanical filler/hedge cleanup, auto-fix
+   scheduling (real timing budgets + leading-gap absorption — the
+   biggest one, full parity across all 10 of the PoC's own scheduling
+   fixtures), and cueTagLine/writeSessionVTT (cue re-serialization).
+3. A files-first orchestration layer: `Service`/`SessionStore`
+   interfaces, `LocalService`/`FileSessionStore` implementations,
+   running the whole upload -> cleanup -> generate -> autofix -> export
+   workflow in-process against the engine (no more shelling out to a
+   separate binary and regex-scraping its report). CLI: `session-upload`,
+   `session-cleanup`, `session-generate`, `session-autofix`,
+   `session-export`, `session-update-cue`, `session-show`, `session-reset`.
+4. An HTTP API (`serve` command): a route-for-route equivalent of
+   dub-studio's `app.py` (minus `/reduce`), **live-verified end-to-end
+   with a real browser (Playwright) driving dub-studio's actual,
+   unmodified `static/index.html`** against it — a real ElevenLabs
+   generate/autofix/export round trip producing a valid, downloadable WAV.
+
+**Deliberately out of scope, don't re-litigate without a reason:**
+`reduce_text` (Claude-drafted line shortening) — it's an LLM call, not
+deterministic business logic, so it doesn't fit this plan's
+byte-identical parity model. No `/reduce` route exists on the new API.
+
+**Not yet done — the real next steps:**
+1. dub-studio (`~/dub-studio/app.py`) has **not** been switched to call
+   this new Go HTTP API. It still runs its own orchestration and shells
+   out to a separately-built binary the old way. The new `serve` command
+   works standalone (proven live) but nothing in `~/dub-studio` points at
+   it yet. This is the actual next decision: point `app.py` at it,
+   replace `app.py` with it entirely (since it already serves
+   `dub-studio`'s own `static/index.html` just fine), or something else.
+2. No PR opened, nothing pushed to `origin` or `upstream`. Decide scope
+   (one PR vs. split) before opening one — see CLAUDE.local.md's PR
+   procedure section for dkarlovi's review norms, though note that section
+   predates this branch and its numbered send-order is explicitly marked
+   historical/superseded, not a template to follow literally.
+3. A pre-existing UI quirk was found and *deliberately left as-is*
+   (faithfully reproduced, not a bug in the port): the legacy frontend's
+   Export button gates on a broader "flagged" condition than real
+   overlaps, so it can show disabled even when `POST /export` would
+   actually succeed (verified directly via a raw API call in that exact
+   state). Worth fixing in the frontend someday; out of scope for this
+   migration.
+
+**Verify the current state from scratch:**
+```sh
+cd ~/srt11 && git status -sb && git log --oneline upstream/main..HEAD
+go build ./... && go vet ./... && go test ./... && gofmt -l .
+go build -o ~/dub-studio/bin/srt11 .   # mandatory after any change — see CLAUDE.local.md
+```
+
+**Try the HTTP server against the real frontend:**
+```sh
+~/dub-studio/bin/srt11 --config ~/dubbing/config.yaml serve \
+  --work-dir /some/scratch/dir --static-dir ~/dub-studio/static --addr :8099
+```
+Then open `http://localhost:8099/` in a browser (it's dub-studio's real
+UI, unmodified), or drive it headlessly with Playwright. No Playwright
+MCP tool was available in this session; `npm --cache <scratch-dir>
+install --no-save playwright` plus `npx playwright install chromium`
+into a scratch prefix worked around a broken global npm cache — don't
+fight that same npm cache again, just scope around it the same way.
+
+**Gotchas already found and fixed, don't rediscover them:**
+- The `parity` command's fixture arg is a positional `console.Arg`:
+  read it with `c.Args().Get("fixture")`, not `c.String("fixture")`.
+- `core.auto_fix_durations` mutates its cues in place — when writing a
+  parity bridge test, snapshot the pristine input *before* calling the
+  Python side, or Go ends up fed the already-mutated result.
+- Top-level `let`/`const` in a classic (non-module) `<script>` tag, like
+  dub-studio's `index.html` uses for its `S` session variable, is not a
+  `window` property — access it as the bare identifier `S` from
+  `page.evaluate`/`page.waitForFunction`, not `window.S`.
+
+---
+
 ## 1. Session start checklist
 
 At the start of a fresh session:
