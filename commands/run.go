@@ -456,9 +456,15 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, merge
 					nextSpeaker, _, _ = resolveSpeaker(next.String())
 				}
 				if canMergeCue(curSpeaker, nextSpeaker, mergedStart, mergedEnd, next.StartAt, next.EndAt, mergeLinesThresholdMs, mergeMaxMs) {
-					// Merge: extend end time, concat text
+					// Merge: extend end time, concat text. Strip next's own
+					// leading speaker tag (if it has one) before folding it
+					// in -- resolveSpeaker only strips a tag anchored at the
+					// very start of a string, so without this, a tag from a
+					// merged-in line lands mid-string and is never stripped,
+					// ending up spoken literally.
+					_, nextDialogue, _ := resolveSpeaker(next.String())
 					mergedEnd = next.EndAt
-					mergedText = strings.TrimSpace(mergedText) + " " + strings.TrimSpace(next.String())
+					mergedText = strings.TrimSpace(mergedText) + " " + strings.TrimSpace(nextDialogue)
 					mergedFrom = append(mergedFrom, fmt.Sprintf("<fg=yellow>%s</> --> <fg=yellow>%s</> (duration <fg=yellow>%s</>) | <info>%s</>",
 						next.StartAt.Round(time.Millisecond),
 						next.EndAt.Round(time.Millisecond),

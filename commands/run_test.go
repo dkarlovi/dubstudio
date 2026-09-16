@@ -367,3 +367,35 @@ func TestGeneratePathTemplate_TruncatesLongTextByRuneNotByte(t *testing.T) {
 		t.Fatalf("template contains invalid UTF-8: %q", path.Template)
 	}
 }
+
+func TestParseSubtitleFile_MergeStripsEachLinesOwnSpeakerTag(t *testing.T) {
+	// Three abutting Matko-tagged lines that should merge into one cue.
+	// resolveSpeaker only strips a tag anchored at the very start of a
+	// string, so only the first line's own [Matko] sits where that reaches
+	// it -- a naive concat leaves the other two embedded mid-string, where
+	// they'd be spoken literally instead of stripped.
+	vtt := `WEBVTT
+
+00:00:00.000 --> 00:00:03.000
+[Matko] one
+
+00:00:03.000 --> 00:00:06.000
+[Matko] two
+
+00:00:06.000 --> 00:00:09.000
+[Matko] three
+`
+	path := writeTempVTT(t, vtt)
+	items := parseSubtitleFile(testConfig(), path, 120, 0)
+
+	if len(items) != 1 {
+		t.Fatalf("want 1 merged cue, got %d: %+v", len(items), items)
+	}
+	text := items[0].Sub.String()
+	if strings.Contains(text, "[Matko]") {
+		t.Fatalf("merged text still contains a literal speaker tag: %q", text)
+	}
+	if text != "one two three" {
+		t.Errorf("want %q, got %q", "one two three", text)
+	}
+}
