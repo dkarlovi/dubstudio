@@ -133,10 +133,10 @@ type RetimeEntry struct {
 }
 
 type AutoFixResult struct {
-	Sped      []SpeedChange
-	Basketed  []BasketEntry
-	Retimed   []RetimeEntry
-	StillOpen int
+	Sped      []SpeedChange `json:"sped"`
+	Basketed  []BasketEntry `json:"basketed"`
+	Retimed   []RetimeEntry `json:"retimed"`
+	StillOpen int           `json:"still_open"`
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }

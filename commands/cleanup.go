@@ -36,9 +36,9 @@ func cleanText(text string) string {
 
 // CueEdit is one cue whose text mechanicalCleanup changed.
 type CueEdit struct {
-	Index  int
-	Before string
-	After  string
+	Index  int    `json:"index"`
+	Before string `json:"before"`
+	After  string `json:"after"`
 }
 
 // mechanicalCleanup runs cleanText over each cue's text and reports which

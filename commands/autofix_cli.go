@@ -37,6 +37,25 @@ type autoFixCueResultJSON struct {
 	HumanReason   string  `json:"human_reason"`
 }
 
+// loadAutoFixConfigFile reads an AutoFixConfig from a JSON file
+// ({tolerance_ms, autofix_margin_ms, speed_caps}), shared by the
+// autofix-parity bridge command and the session-autofix CLI command.
+func loadAutoFixConfigFile(path string) (AutoFixConfig, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return AutoFixConfig{}, fmt.Errorf("reading autofix config file: %w", err)
+	}
+	var cfgJSON autoFixConfigJSON
+	if err := json.Unmarshal(raw, &cfgJSON); err != nil {
+		return AutoFixConfig{}, fmt.Errorf("parsing autofix config JSON: %w", err)
+	}
+	return AutoFixConfig{
+		ToleranceMs:     cfgJSON.ToleranceMs,
+		AutofixMarginMs: cfgJSON.AutofixMarginMs,
+		SpeedCaps:       cfgJSON.SpeedCaps,
+	}, nil
+}
+
 func autoFixParitySummary(cuesPath, configPath string) ([]byte, error) {
 	cuesRaw, err := os.ReadFile(cuesPath)
 	if err != nil {
@@ -47,13 +66,9 @@ func autoFixParitySummary(cuesPath, configPath string) ([]byte, error) {
 		return nil, fmt.Errorf("parsing cues JSON: %w", err)
 	}
 
-	configRaw, err := os.ReadFile(configPath)
+	cfg, err := loadAutoFixConfigFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading autofix config file: %w", err)
-	}
-	var cfgJSON autoFixConfigJSON
-	if err := json.Unmarshal(configRaw, &cfgJSON); err != nil {
-		return nil, fmt.Errorf("parsing autofix config JSON: %w", err)
+		return nil, err
 	}
 
 	cues := make([]*AutoFixCue, 0, len(inputCues))
@@ -69,11 +84,7 @@ func autoFixParitySummary(cuesPath, configPath string) ([]byte, error) {
 		})
 	}
 
-	result := AutoFixDurations(cues, AutoFixConfig{
-		ToleranceMs:     cfgJSON.ToleranceMs,
-		AutofixMarginMs: cfgJSON.AutofixMarginMs,
-		SpeedCaps:       cfgJSON.SpeedCaps,
-	})
+	result := AutoFixDurations(cues, cfg)
 
 	cuesOut := make([]autoFixCueResultJSON, 0, len(cues))
 	for _, c := range cues {

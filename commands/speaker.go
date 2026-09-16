@@ -76,9 +76,9 @@ var anyTagRE = regexp.MustCompile(`\[[^\]]+\]`)
 // find_midcue_tag_violations (core.py), a free, upload-time guard against
 // that class of bug.
 type TagViolation struct {
-	Index int
-	Tag   string
-	Text  string
+	Index int    `json:"index"`
+	Tag   string `json:"tag"`
+	Text  string `json:"text"`
 }
 
 func findMidCueTagViolations(subs *astisub.Subtitles) []TagViolation {

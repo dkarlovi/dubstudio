@@ -174,6 +174,111 @@ func All() []*console.Command {
 			},
 			Action: runAutoFixParity,
 		},
+		{
+			Name:        "session-upload",
+			Usage:       "Start a new dub-studio session from a subtitle file",
+			Description: "Parse a subtitle file into a session, rejecting it if any speaker tag isn't at the very start of a cue",
+			Args: []*console.Arg{
+				{Name: "file", Description: "Path to the .srt or .vtt subtitle file"},
+			},
+			Flags: append([]console.Flag{
+				&console.StringFlag{Name: "name", Usage: "Session name (defaults to the file's basename)"},
+			}, sessionWorkDirFlags()...),
+			Action: runSessionUpload,
+		},
+		{
+			Name:   "session-cleanup",
+			Usage:  "Apply deterministic filler/hedge-phrase cleanup to the active session",
+			Flags:  sessionWorkDirFlags(),
+			Action: runSessionCleanup,
+		},
+		{
+			Name:   "session-generate",
+			Usage:  "Generate audio for the active session's dirty/uncached cues",
+			Flags:  append(sessionWorkDirFlags(), sessionGenerationFlags()...),
+			Action: runSessionGenerate,
+		},
+		{
+			Name:  "session-autofix",
+			Usage: "Run the auto-fix scheduling policy (speed bump or basket) on the active session",
+			Flags: append([]console.Flag{
+				&console.StringFlag{Name: "autofix-config", Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps}); built-in defaults are used if omitted"},
+			}, sessionWorkDirFlags()...),
+			Action: runSessionAutoFix,
+		},
+		{
+			Name:   "session-export",
+			Usage:  "Export the active session's final mixed WAV",
+			Flags:  append(sessionWorkDirFlags(), sessionGenerationFlags()...),
+			Action: runSessionExport,
+		},
+		{
+			Name:  "session-update-cue",
+			Usage: "Manually edit one cue's text and/or speed",
+			Flags: append([]console.Flag{
+				&console.IntFlag{Name: "index", Usage: "1-based cue index to edit"},
+				&console.StringFlag{Name: "text", Usage: "New spoken text for the cue"},
+				&console.Float64Flag{Name: "speed", Usage: "New speed override for the cue"},
+			}, sessionWorkDirFlags()...),
+			Action: runSessionUpdateCue,
+		},
+		{
+			Name:   "session-show",
+			Usage:  "Print the active session's current state",
+			Flags:  sessionWorkDirFlags(),
+			Action: runSessionShow,
+		},
+		{
+			Name:   "session-reset",
+			Usage:  "Clear the active session",
+			Flags:  sessionWorkDirFlags(),
+			Action: runSessionReset,
+		},
+	}
+}
+
+func sessionWorkDirFlags() []console.Flag {
+	return []console.Flag{
+		&console.StringFlag{
+			Name:         "work-dir",
+			Usage:        "Directory holding this session's state, working VTT, and exported audio",
+			DefaultValue: ".",
+		},
+	}
+}
+
+// sessionGenerationFlags mirror dub-studio's config.py defaults
+// (MERGE_THRESHOLD_MS, MERGE_MAX_MS, OVERLAP_TOLERANCE_MS) as out-of-the-
+// box behavior for session-generate/session-export.
+func sessionGenerationFlags() []console.Flag {
+	return []console.Flag{
+		&console.IntFlag{
+			Name:         "merge-lines-threshold-ms",
+			Aliases:      []string{"m"},
+			Usage:        "Merge lines if same speaker and gap is below this threshold (ms)",
+			DefaultValue: 120,
+		},
+		&console.IntFlag{
+			Name:         "merge-max-ms",
+			Usage:        "Cap a merged cue's total window to this many ms (0 = unlimited)",
+			DefaultValue: 6300,
+		},
+		&console.IntFlag{
+			Name:         "overlap-tolerance-ms",
+			Aliases:      []string{"t"},
+			Usage:        "Allow same-voice overlaps up to this many ms",
+			DefaultValue: 120,
+		},
+		&console.IntFlag{
+			Name:         "normalize-target-db",
+			Usage:        "Gain each cue toward this target RMS before mixing (0 or above disables)",
+			DefaultValue: -20,
+		},
+		&console.IntFlag{
+			Name:         "run-cap",
+			Usage:        "Refuse to Generate past this many runs for the session (0 = unlimited)",
+			DefaultValue: 10,
+		},
 	}
 }
 
