@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/dkarlovi/srt11/commands"
+	"github.com/dkarlovi/dubstudio/commands"
 	"github.com/symfony-cli/console"
 )
 
@@ -16,7 +16,7 @@ var (
 
 func main() {
 	app := &console.Application{
-		Name:        "srt11",
+		Name:        "dubstudio",
 		Usage:       "Convert subtitle files to audio using ElevenLabs TTS",
 		Description: "Uses ElevenLabs Text-to-Speech (TTS) to convert an .srt (or .vtt) subtitle file into a WAV audio track, matching the subtitle timings.",
 		Version:     version,

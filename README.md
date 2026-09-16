@@ -1,76 +1,76 @@
-# srt11
+# dubstudio
 
-`srt11` uses ElevenLabs Text-to-Speech (TTS) to convert an `.srt` (or `.vtt`) subtitle file into a WAV audio track, matching the subtitle timings. This enables easy replacement of audio tracks in videos using only subtitles.
+`dubstudio` uses ElevenLabs Text-to-Speech (TTS) to convert an `.srt` (or `.vtt`) subtitle file into a WAV audio track, matching the subtitle timings. This enables easy replacement of audio tracks in videos using only subtitles.
 
 ## Download
 
 Pre-built binaries for Linux, Windows, and Mac are available at:  
-[https://github.com/dkarlovi/srt11/releases/latest](https://github.com/dkarlovi/srt11/releases/latest)
+[https://github.com/dkarlovi/dubstudio/releases/latest](https://github.com/dkarlovi/dubstudio/releases/latest)
 
 ## Usage
 
 1. Create the config file [`config.yaml`](./config.yaml.dist) as so:
-    ```yaml
-    auth_key: "sk_your_auth_key"
-    default:
-        model: "model_id"
-        name: "Speaker name"
-        speed: 1.1
-    # Optional: merge lines if same speaker and gap is below this threshold (in ms)
-    merge_lines_threshold_ms: 50
-    models:
-        # Optional: add custom speakers
-        # https://github.com/dkarlovi/srt11?tab=readme-ov-file#speakers
-        Joe:
-            model: "joe_model_id"
-            name: "Joe"
-    ```
+   ```yaml
+   auth_key: "sk_your_auth_key"
+   default:
+     model: "model_id"
+     name: "Speaker name"
+     speed: 1.1
+   # Optional: merge lines if same speaker and gap is below this threshold (in ms)
+   merge_lines_threshold_ms: 50
+   models:
+     # Optional: add custom speakers
+     # https://github.com/dkarlovi/dubstudio?tab=readme-ov-file#speakers
+     Joe:
+       model: "joe_model_id"
+       name: "Joe"
+   ```
 2. create [the ElevenLabs API key](https://elevenlabs.io/app/settings/api-keys) and paste as `auth_key` into the config file
-3. download the [latest release](https://github.com/dkarlovi/srt11/releases/latest) appropriate for your system and unpack somewhere
+3. download the [latest release](https://github.com/dkarlovi/dubstudio/releases/latest) appropriate for your system and unpack somewhere
 4. from the folder where you keep your `config.yaml`, run the binary like so:
-    ```sh
-    srt11 run data/130_EN.vtt
-    ```
-    The `run` command takes a single required argument: the path to the `.srt` or `.vtt` file. If your config lives elsewhere, point at it with `-c` / `--config`:
-    ```sh
-    srt11 run --config /path/to/config.yaml data/130_EN.vtt
-    ```
+   ```sh
+   dubstudio run data/130_EN.vtt
+   ```
+   The `run` command takes a single required argument: the path to the `.srt` or `.vtt` file. If your config lives elsewhere, point at it with `-c` / `--config`:
+   ```sh
+   dubstudio run --config /path/to/config.yaml data/130_EN.vtt
+   ```
 5. this will process the VTT/SRT file and produce output similar to this:
-    ```
-    2025/05/23 16:07:17 No merge threshold set, not merging lines
-    #001
-    ...so you shouldn't eat any teeth half an hour before...
-    Speaker:  Hana, speed: 1.00
-    Subtitle: 0s --> 2.69s (duration 2.69s)
-    Audio:    0s --> 3.657s (duration 3.657s)
-    Path:     /home/dkarlovi/Development/OSS/srt11/data/96EB5561-Hana-so_you_shouldnt_eat_any_teeth_half_an_hour_before.jajumpwyk0xFZQn4P41i.mp3
-   
-    (...stuff...)
+   ```
+   2025/05/23 16:07:17 No merge threshold set, not merging lines
+   #001
+   ...so you shouldn't eat any teeth half an hour before...
+   Speaker:  Hana, speed: 1.00
+   Subtitle: 0s --> 2.69s (duration 2.69s)
+   Audio:    0s --> 3.657s (duration 3.657s)
+   Path:     /home/dkarlovi/Development/OSS/dubstudio/data/96EB5561-Hana-so_you_shouldnt_eat_any_teeth_half_an_hour_before.jajumpwyk0xFZQn4P41i.mp3
 
-    2025/05/23 16:07:18 Final audio track written to data/130_EN_2025-05-23-16-07-17.wav
-    ```
+   (...stuff...)
+
+   2025/05/23 16:07:18 Final audio track written to data/130_EN_2025-05-23-16-07-17.wav
+   ```
 6. the file is ready to be used
 
 ## Speakers
 
 By default, all lines are read by the `default` speaker. You can override this per line in one of these ways (they are mutually exclusive and detected in this order):
- 
+
 1. Add a VTT speaker (only `.vtt` files):
-    ```
-    00:22.980 --> 00:23.300
-    <v Matko>What do we do?</v>
-    ```
+   ```
+   00:22.980 --> 00:23.300
+   <v Matko>What do we do?</v>
+   ```
 2. Add a VTT comment (only `.vtt` files):
-    ```
-    NOTE Matko
-    00:22.980 --> 00:23.300
-    What do we do?
-    ```
+   ```
+   NOTE Matko
+   00:22.980 --> 00:23.300
+   What do we do?
+   ```
 3. Add in square brackets in front of the line:
-    ```
-    00:22.980 --> 00:23.300
-    [Matko]What do we do?
-    ```
+   ```
+   00:22.980 --> 00:23.300
+   [Matko]What do we do?
+   ```
 
 Each named speaker must be defined in the `config.yaml` file. The default speaker is used if no speaker is defined.
 
@@ -101,22 +101,22 @@ A line with a per-line speed is treated as a branch off [request stitching](http
 
 ## TTS model
 
-By default, `srt11` generates speech with the [`eleven_multilingual_v2`](https://elevenlabs.io/docs/models) ElevenLabs model. You can choose a different model with the optional `tts_model` field, either globally or per speaker:
+By default, `dubstudio` generates speech with the [`eleven_multilingual_v2`](https://elevenlabs.io/docs/models) ElevenLabs model. You can choose a different model with the optional `tts_model` field, either globally or per speaker:
 
 ```yaml
 auth_key: "sk_your_auth_key"
 # Applies to every speaker unless overridden below
 tts_model: "eleven_multilingual_v2"
 default:
-    model: "model_id"
-    name: "Speaker name"
-    speed: 1.1
+  model: "model_id"
+  name: "Speaker name"
+  speed: 1.1
 models:
-    Joe:
-        model: "joe_model_id"
-        name: "Joe"
-        # Overrides the top-level tts_model just for Joe
-        tts_model: "eleven_flash_v2_5"
+  Joe:
+    model: "joe_model_id"
+    name: "Joe"
+    # Overrides the top-level tts_model just for Joe
+    tts_model: "eleven_flash_v2_5"
 ```
 
 The model is resolved per line in this order: the speaker's own `tts_model`, then the top-level `tts_model`, then the built-in default (`eleven_multilingual_v2`). Omitting the field entirely keeps the previous behaviour, so existing configs are unaffected.
@@ -125,7 +125,7 @@ The model is resolved per line in this order: the speaker's own `tts_model`, the
 > `tts_model` is the ElevenLabs **model** (the synthesis engine). The `model` field under each speaker is the ElevenLabs **voice ID** and is unrelated.
 
 > [!WARNING]
-> `srt11` relies on the per-speaker `speed` setting and on [request stitching](https://elevenlabs.io/docs/eleven-api/guides/how-to/text-to-speech/request-stitching) for timing and cross-line continuity. Neither is supported by `eleven_v3`, so that model is not recommended here. `eleven_multilingual_v2` and the `eleven_flash_v2_5` / `eleven_flash_v2` models support both and are safe choices.
+> `dubstudio` relies on the per-speaker `speed` setting and on [request stitching](https://elevenlabs.io/docs/eleven-api/guides/how-to/text-to-speech/request-stitching) for timing and cross-line continuity. Neither is supported by `eleven_v3`, so that model is not recommended here. `eleven_multilingual_v2` and the `eleven_flash_v2_5` / `eleven_flash_v2` models support both and are safe choices.
 
 The selected model is included in the generated file's cache key, so switching models re-generates audio instead of reusing files produced by a different model. The run log also prints the model used for each line, e.g. `Speaking (as Joe via eleven_flash_v2_5)`.
 
@@ -137,29 +137,33 @@ You can either set the `merge_lines_threshold_ms` in the config file or use the 
 The default is no merging.
 
 Use `--merge-max-ms` to cap how long a merged cue's total window (its first line's start to its last line's end) is allowed to grow. Once folding the next line in would push the window past this cap, that cue is closed and a new one is started instead — so a long run of short, abutting same-speaker lines can't fold into one arbitrarily long take. The default, `0`, is unlimited (today's behaviour if you don't pass it). A cross-speaker boundary always breaks a merge regardless of this setting.
+
 ```sh
-srt11 run -m 120 --merge-max-ms 6000 data/130_EN.vtt
+dubstudio run -m 120 --merge-max-ms 6000 data/130_EN.vtt
 ```
 
 ## Overlap detection
 
-Because each speaker's lines share a single audio channel, two same-speaker cues whose audio overlaps in time will audibly play on top of each other. By default `srt11` treats any such overlap as fatal: it prints the offending cues under `Overlaps detected:` and exits with a non-zero status without writing the final WAV.
+Because each speaker's lines share a single audio channel, two same-speaker cues whose audio overlaps in time will audibly play on top of each other. By default `dubstudio` treats any such overlap as fatal: it prints the offending cues under `Overlaps detected:` and exits with a non-zero status without writing the final WAV.
 
 If a small amount of overlap is acceptable for your material, allow it with `-t` / `--overlap-tolerance-ms`: overlaps up to this many milliseconds are tolerated and the final audio is still written. The default is `0` (no tolerance, the original behaviour).
+
 ```sh
-srt11 run -t 150 data/130_EN.vtt
+dubstudio run -t 150 data/130_EN.vtt
 ```
 
-Overlaps between *different* speakers are handled separately, since some cross-talk between speakers is often natural rather than a defect. Cross-speaker overlaps are always reported per-cue as `(CROSS-OVERLAP Nms)` in the run log, but by default they never fail the run. Pass `--cross-overlap-tolerance-ms` with a value `>= 0` to additionally gate on them past that many milliseconds, the same way `--overlap-tolerance-ms` gates same-speaker overlaps. The default is `-1` (report only, never fail).
+Overlaps between _different_ speakers are handled separately, since some cross-talk between speakers is often natural rather than a defect. Cross-speaker overlaps are always reported per-cue as `(CROSS-OVERLAP Nms)` in the run log, but by default they never fail the run. Pass `--cross-overlap-tolerance-ms` with a value `>= 0` to additionally gate on them past that many milliseconds, the same way `--overlap-tolerance-ms` gates same-speaker overlaps. The default is `-1` (report only, never fail).
+
 ```sh
-srt11 run --cross-overlap-tolerance-ms 300 data/130_EN.vtt
+dubstudio run --cross-overlap-tolerance-ms 300 data/130_EN.vtt
 ```
 
 ## Audio normalization
 
-ElevenLabs' generated output level can vary noticeably between requests, even for the same voice — one line can end up audibly louder or quieter than its neighbours in the final mix. `srt11` corrects for this by gaining each cue's audio toward a consistent RMS level before mixing, controlled by `--normalize-target-db` (in dBFS). The default is `-20`, a typical target for spoken-word content; passing `0` or a positive value disables normalization entirely.
+ElevenLabs' generated output level can vary noticeably between requests, even for the same voice — one line can end up audibly louder or quieter than its neighbours in the final mix. `dubstudio` corrects for this by gaining each cue's audio toward a consistent RMS level before mixing, controlled by `--normalize-target-db` (in dBFS). The default is `-20`, a typical target for spoken-word content; passing `0` or a positive value disables normalization entirely.
 
 The gain applied to any single cue is capped at +24dB boost, so a near-silent or broken generation doesn't get amplified into audible noise — it just stays an obvious outlier to catch on review — and the result is clamped to a -1dBFS ceiling so normalization itself can never introduce clipping.
+
 ```sh
-srt11 run --normalize-target-db -18 data/130_EN.vtt
+dubstudio run --normalize-target-db -18 data/130_EN.vtt
 ```

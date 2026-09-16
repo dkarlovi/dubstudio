@@ -1,7 +1,7 @@
 auth_key: "sk_your_auth_key"
 # Optional: ElevenLabs TTS model ID used for all speakers.
 # Defaults to "eleven_multilingual_v2" if omitted.
-# See https://github.com/dkarlovi/srt11?tab=readme-ov-file#tts-model
+# See https://github.com/dkarlovi/dubstudio?tab=readme-ov-file#tts-model
 tts_model: "eleven_multilingual_v2"
 default:
     model: "model_id"
@@ -11,7 +11,7 @@ default:
 merge_lines_threshold_ms: 50
 models:
     # Optional: add custom speakers
-    # https://github.com/dkarlovi/srt11?tab=readme-ov-file#speakers
+    # https://github.com/dkarlovi/dubstudio?tab=readme-ov-file#speakers
     Joe:
         model: "joe_model_id"
         name: "Joe"
