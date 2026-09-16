@@ -5,8 +5,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/asticode/go-astisub"
 )
@@ -344,4 +346,24 @@ func TestNormalizationGain(t *testing.T) {
 			t.Errorf("want gain 1 for empty input, got %v", gain)
 		}
 	})
+}
+
+func TestGeneratePathTemplate_TruncatesLongTextByRuneNotByte(t *testing.T) {
+	dir := t.TempDir()
+	// 48 ASCII bytes followed by a 3-byte em dash lands the byte offset 50
+	// squarely inside the em dash's UTF-8 encoding -- a byte-slice there
+	// produces an invalid UTF-8 filename that breaks any consumer decoding
+	// this program's output as UTF-8 (e.g. Python's subprocess.run with
+	// text=True).
+	longText := strings.Repeat("a", 48) + "—" + "more text after the dash to push well past the limit"
+	item := &astisub.Item{
+		Lines: []astisub.Line{{Items: []astisub.LineItem{{Text: longText}}}},
+	}
+	model := Model{model: "voice-id", name: "Hana", ttsModel: "eleven_multilingual_v2", speed: 1.0}
+
+	path := generatePathTemplate(dir, item, model)
+
+	if !utf8.ValidString(path.Template) {
+		t.Fatalf("template contains invalid UTF-8: %q", path.Template)
+	}
 }

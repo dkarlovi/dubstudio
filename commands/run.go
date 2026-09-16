@@ -307,8 +307,13 @@ func generatePathTemplate(root string, item *astisub.Item, model Model) Path {
 	dialog = strings.ToLower(dialog)
 	dialog = strings.Replace(dialog, " ", "_", -1)
 	dialog = strings.TrimSpace(dialog)
-	if len(dialog) > 50 {
-		dialog = dialog[:50]
+	if runes := []rune(dialog); len(runes) > 50 {
+		// Truncate by rune, not byte: a byte slice can land mid-character on
+		// multi-byte UTF-8 text (em dashes, curly quotes, accented letters),
+		// producing an invalid UTF-8 filename that breaks any consumer
+		// decoding this program's output as UTF-8 (e.g. Python's
+		// subprocess.run(..., text=True)).
+		dialog = string(runes[:50])
 	}
 
 	// Everything that changes the produced audio goes into the checksum: voice
