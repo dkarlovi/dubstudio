@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/asticode/go-astisub"
 )
 
 // Speed bounds accepted by ElevenLabs' voice settings. Values outside this
@@ -63,6 +65,38 @@ func resolveSpeaker(text string) (name, dialogue string, tagged bool) {
 		return "", text, false
 	}
 	return strings.TrimSpace(m[1]), strings.TrimSpace(m[2]), true
+}
+
+var anyTagRE = regexp.MustCompile(`\[[^\]]+\]`)
+
+// TagViolation is a cue whose text contains a [Name]/[Name@speed] tag
+// somewhere other than the very start. speakerTagRE above only recognizes a
+// tag anchored at position 0 as a speaker switch; a tag anywhere else is
+// sent to TTS as literal text instead. Ported from dub-studio's
+// find_midcue_tag_violations (core.py), a free, upload-time guard against
+// that class of bug.
+type TagViolation struct {
+	Index int
+	Tag   string
+	Text  string
+}
+
+func findMidCueTagViolations(subs *astisub.Subtitles) []TagViolation {
+	violations := make([]TagViolation, 0)
+	for _, item := range subs.Items {
+		text := strings.TrimSpace(item.String())
+		for _, loc := range anyTagRE.FindAllStringIndex(text, -1) {
+			if strings.TrimSpace(text[:loc[0]]) != "" {
+				violations = append(violations, TagViolation{
+					Index: item.Index + 1,
+					Tag:   text[loc[0]:loc[1]],
+					Text:  text,
+				})
+				break
+			}
+		}
+	}
+	return violations
 }
 
 func lookupSpeakerModel(name string, config *Config) (SpeakerConfig, error) {

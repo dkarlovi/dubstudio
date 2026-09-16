@@ -125,6 +125,34 @@ func All() []*console.Command {
 			},
 			Action: Run,
 		},
+		{
+			Name:        "parity",
+			Usage:       "Emit a deterministic summary of a subtitle fixture for migration parity checks",
+			Description: "Write a JSON summary for a fixture file for parity validation against the Python PoC",
+			Args: []*console.Arg{
+				{
+					Name:        "fixture",
+					Description: "Path to the .vtt/.srt fixture to summarize",
+				},
+			},
+			Flags: []console.Flag{
+				&console.StringFlag{
+					Name:         "out-dir",
+					Usage:        "Directory to write the parity summary JSON into",
+					DefaultValue: ".",
+				},
+				&console.IntFlag{
+					Name:    "merge-lines-threshold-ms",
+					Aliases: []string{"m"},
+					Usage:   "Merge lines if same speaker and gap is below this threshold (ms)",
+				},
+				&console.IntFlag{
+					Name:  "merge-max-ms",
+					Usage: "Cap a merged cue's total window (first start to last end) to this many ms; once folding the next line in would exceed it, start a new cue instead (0 = unlimited)",
+				},
+			},
+			Action: runParity,
+		},
 	}
 }
 

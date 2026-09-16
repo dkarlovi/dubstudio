@@ -239,3 +239,51 @@ func TestPreviousIdsFor(t *testing.T) {
 		}
 	})
 }
+
+// Mirrors dub-studio's tests/test_vtt_and_cleanup.py::TestMidcueTagViolations
+// (find_midcue_tag_violations in core.py) -- the migration's first ported
+// feature. srt11 only recognizes a speaker/speed tag when it's the very
+// first thing in a cue (see resolveSpeaker above); a tag anywhere else is
+// spoken literally instead of switching speaker, so this is a free,
+// upload-time guard against that class of bug.
+func TestFindMidCueTagViolations(t *testing.T) {
+	t.Run("flags a tag that is not the first thing in the cue", func(t *testing.T) {
+		subs, err := astisub.ReadFromWebVTT(strings.NewReader(
+			"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello [Matko] there.\n"))
+		if err != nil {
+			t.Fatalf("ReadFromWebVTT() error: %v", err)
+		}
+		got := findMidCueTagViolations(subs)
+		if len(got) != 1 {
+			t.Fatalf("want 1 violation, got %d: %v", len(got), got)
+		}
+		if got[0].Index != 1 {
+			t.Errorf("index = %d, want 1", got[0].Index)
+		}
+		if got[0].Tag != "[Matko]" {
+			t.Errorf("tag = %q, want [Matko]", got[0].Tag)
+		}
+	})
+
+	t.Run("a leading tag is not a violation", func(t *testing.T) {
+		subs, err := astisub.ReadFromWebVTT(strings.NewReader(
+			"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n[Matko] Hello there.\n"))
+		if err != nil {
+			t.Fatalf("ReadFromWebVTT() error: %v", err)
+		}
+		if got := findMidCueTagViolations(subs); len(got) != 0 {
+			t.Fatalf("want no violations, got %v", got)
+		}
+	})
+
+	t.Run("no tag at all is not a violation", func(t *testing.T) {
+		subs, err := astisub.ReadFromWebVTT(strings.NewReader(
+			"WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nJust plain text.\n"))
+		if err != nil {
+			t.Fatalf("ReadFromWebVTT() error: %v", err)
+		}
+		if got := findMidCueTagViolations(subs); len(got) != 0 {
+			t.Fatalf("want no violations, got %v", got)
+		}
+	})
+}
