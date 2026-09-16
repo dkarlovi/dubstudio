@@ -76,7 +76,28 @@ Each named speaker must be defined in the `config.yaml` file. The default speake
 
 ## Speed
 
-The speed of the audio can be adjusted in the config file. The default is 1.0, but you can set it to any value between 0.7 and 1.3. The speed is per speaker.
+The speed of the audio can be adjusted in the config file. The default is 1.0, but you can set it to any value between 0.7 and 1.2. The speed is per speaker.
+
+### Per-line speed
+
+A single line can override its speaker's speed by appending `@speed` to the speaker tag. This works with all three speaker forms, and with no speaker name at all for the default speaker:
+
+```
+[Matko@1.15]What do we do?
+
+<v Matko@1.15>What do we do?</v>
+
+NOTE Matko@1.15
+What do we do?
+
+[@1.15]A line for the default speaker, a little faster.
+```
+
+The speed is resolved per line in this order: the line's own `@speed`, then the speaker's `speed`, then `default.speed`, then `1.0`. A value outside 0.7-1.2 is rejected when the subtitle file is parsed, rather than being clamped silently.
+
+The effective speed is part of the cache key, so each speed of a line is kept as its own file. Both takes stay on disk and the final track is assembled from whichever speed is currently set.
+
+A line with a per-line speed is treated as a branch off [request stitching](https://elevenlabs.io/docs/eleven-api/guides/how-to/text-to-speech/request-stitching) rather than a link in the chain: lines at the speaker's normal speed step over it, so changing one line's speed does not force the rest of the file to regenerate. Consecutive lines sharing the same override stitch onto each other.
 
 ## TTS model
 
@@ -114,3 +135,31 @@ If you have multiple lines in a row spoken by the same speaker, you can merge th
 You can either set the `merge_lines_threshold_ms` in the config file or use the `-m` / `--merge-lines-threshold-ms` flag when running the program. The flag takes precedence over the config file.
 
 The default is no merging.
+
+Use `--merge-max-ms` to cap how long a merged cue's total window (its first line's start to its last line's end) is allowed to grow. Once folding the next line in would push the window past this cap, that cue is closed and a new one is started instead — so a long run of short, abutting same-speaker lines can't fold into one arbitrarily long take. The default, `0`, is unlimited (today's behaviour if you don't pass it). A cross-speaker boundary always breaks a merge regardless of this setting.
+```sh
+srt11 run -m 120 --merge-max-ms 6000 data/130_EN.vtt
+```
+
+## Overlap detection
+
+Because each speaker's lines share a single audio channel, two same-speaker cues whose audio overlaps in time will audibly play on top of each other. By default `srt11` treats any such overlap as fatal: it prints the offending cues under `Overlaps detected:` and exits with a non-zero status without writing the final WAV.
+
+If a small amount of overlap is acceptable for your material, allow it with `-t` / `--overlap-tolerance-ms`: overlaps up to this many milliseconds are tolerated and the final audio is still written. The default is `0` (no tolerance, the original behaviour).
+```sh
+srt11 run -t 150 data/130_EN.vtt
+```
+
+Overlaps between *different* speakers are handled separately, since some cross-talk between speakers is often natural rather than a defect. Cross-speaker overlaps are always reported per-cue as `(CROSS-OVERLAP Nms)` in the run log, but by default they never fail the run. Pass `--cross-overlap-tolerance-ms` with a value `>= 0` to additionally gate on them past that many milliseconds, the same way `--overlap-tolerance-ms` gates same-speaker overlaps. The default is `-1` (report only, never fail).
+```sh
+srt11 run --cross-overlap-tolerance-ms 300 data/130_EN.vtt
+```
+
+## Audio normalization
+
+ElevenLabs' generated output level can vary noticeably between requests, even for the same voice — one line can end up audibly louder or quieter than its neighbours in the final mix. `srt11` corrects for this by gaining each cue's audio toward a consistent RMS level before mixing, controlled by `--normalize-target-db` (in dBFS). The default is `-20`, a typical target for spoken-word content; passing `0` or a positive value disables normalization entirely.
+
+The gain applied to any single cue is capped at +24dB boost, so a near-silent or broken generation doesn't get amplified into audible noise — it just stays an obvious outlier to catch on review — and the result is clamped to a -1dBFS ceiling so normalization itself can never introduce clipping.
+```sh
+srt11 run --normalize-target-db -18 data/130_EN.vtt
+```

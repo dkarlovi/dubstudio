@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -102,6 +103,25 @@ func All() []*console.Command {
 					Aliases: []string{"m"},
 					Usage:   "Merge lines if same speaker and gap is below this threshold (ms)",
 				},
+				&console.IntFlag{
+					Name:  "merge-max-ms",
+					Usage: "Cap a merged cue's total window (first start to last end) to this many ms; once folding the next line in would exceed it, start a new cue instead (0 = unlimited, the default)",
+				},
+				&console.IntFlag{
+					Name:    "overlap-tolerance-ms",
+					Aliases: []string{"t"},
+					Usage:   "Allow same-speaker overlaps up to this many ms without failing; the final audio is still written (0 = require no overlap, the default)",
+				},
+				&console.IntFlag{
+					Name:         "cross-overlap-tolerance-ms",
+					Usage:        "Gate on cross-speaker overlaps past this many ms, like --overlap-tolerance-ms; cross-overlaps are always reported per-cue regardless (default -1 = report only, never fail)",
+					DefaultValue: -1,
+				},
+				&console.IntFlag{
+					Name:         "normalize-target-db",
+					Usage:        "Gain each cue toward this RMS level (dBFS) before mixing, evening out level swings between ElevenLabs generations; 0 or above disables normalization",
+					DefaultValue: -20,
+				},
 			},
 			Action: Run,
 		},
@@ -126,24 +146,53 @@ func Run(c *console.Context) error {
 		log.Printf("No merge threshold set, not merging lines")
 	}
 
-	items := parseSubtitleFile(config, path, threshold)
+	mergeMaxMs := c.Int("merge-max-ms")
+	if mergeMaxMs > 0 {
+		log.Printf("Using merge max window: %dms", mergeMaxMs)
+	}
+
+	overlapTolerance := time.Duration(c.Int("overlap-tolerance-ms")) * time.Millisecond
+	if overlapTolerance > 0 {
+		log.Printf("Using overlap tolerance: %s", overlapTolerance)
+	}
+
+	crossOverlapToleranceMs := c.Int("cross-overlap-tolerance-ms")
+	if crossOverlapToleranceMs >= 0 {
+		log.Printf("Using cross-overlap tolerance: %dms", crossOverlapToleranceMs)
+	}
+
+	normalizeTargetDb := c.Int("normalize-target-db")
+	if normalizeTargetDb < 0 {
+		log.Printf("Normalizing each cue toward %ddB RMS before mixing", normalizeTargetDb)
+	} else {
+		log.Printf("Normalization disabled")
+	}
+
+	items := parseSubtitleFile(config, path, threshold, mergeMaxMs)
 
 	client := elevenlabs.NewClient(context.Background(), config.AuthKey, 30*time.Second)
 	audioFiles := generateMissingVoiceLines(client, items)
 
-	overlapsByFirst := make(map[int]cueOverlap)
-	for _, ov := range findOverlaps(audioFiles, 0) {
-		overlapsByFirst[ov.First] = ov
+	overlapsByFirst, overlaps := annotateOverlaps(audioFiles, findOverlaps(audioFiles, overlapTolerance))
+
+	// Cross-overlaps are always reported per-cue at tolerance 0, regardless of
+	// whether they gate the run.
+	crossOverlapsByFirst, _ := annotateOverlaps(audioFiles, findCrossOverlaps(audioFiles, 0))
+
+	var crossOverlaps []AudioFile
+	if crossOverlapToleranceMs >= 0 {
+		crossTolerance := time.Duration(crossOverlapToleranceMs) * time.Millisecond
+		_, crossOverlaps = annotateOverlaps(audioFiles, findCrossOverlaps(audioFiles, crossTolerance))
 	}
 
-	overlaps := make([]AudioFile, 0)
 	for i, file := range audioFiles {
 		fileEndAt := file.Offset + file.Duration
 		var overlapText string
 		if ov, ok := overlapsByFirst[i]; ok {
-			file.Overlap = ov.Duration
-			overlapText = fmt.Sprintf(" (<fg=yellow>OVERLAP %s</>)", file.Overlap.Round(time.Millisecond))
-			overlaps = append(overlaps, file)
+			overlapText += fmt.Sprintf(" (<fg=yellow>OVERLAP %s</>)", ov.Duration.Round(time.Millisecond))
+		}
+		if ov, ok := crossOverlapsByFirst[i]; ok {
+			overlapText += fmt.Sprintf(" (<fg=cyan>CROSS-OVERLAP %s</>)", ov.Duration.Round(time.Millisecond))
 		}
 
 		fmt.Fprintf(c.App.Writer,
@@ -189,12 +238,25 @@ func Run(c *console.Context) error {
 				overlap.Item.Sub.String(),
 			)
 		}
+	}
+	if len(crossOverlaps) > 0 {
+		fmt.Fprintf(c.App.Writer, "<fg=cyan>Cross-overlaps detected:</>\n")
+		for _, overlap := range crossOverlaps {
+			fmt.Fprintf(c.App.Writer,
+				"#%03d <fg=cyan>%s</>\n<info>%s</>\n\n",
+				overlap.Item.Sub.Index+1,
+				overlap.Overlap.Round(time.Millisecond),
+				overlap.Item.Sub.String(),
+			)
+		}
+	}
+	if len(overlaps) > 0 || len(crossOverlaps) > 0 {
 		fmt.Fprintf(c.App.Writer, "Fix and rerun the script to generate the final audio file.\n")
 		os.Exit(1)
 	}
 
 	outputPath := strings.TrimSuffix(path, filepath.Ext(path)) + "_" + time.Now().Format("2006-01-02-15-04-05") + ".wav"
-	if err := generateFinalAudioFile(audioFiles, outputPath); err != nil {
+	if err := generateFinalAudioFile(audioFiles, outputPath, float64(normalizeTargetDb)); err != nil {
 		return console.Exit(fmt.Sprintf("Error writing final audio track: %v", err), 1)
 	}
 	log.Printf("Final audio track written to %s\n", outputPath)
@@ -245,27 +307,101 @@ func generatePathTemplate(root string, item *astisub.Item, model Model) Path {
 	dialog = strings.ToLower(dialog)
 	dialog = strings.Replace(dialog, " ", "_", -1)
 	dialog = strings.TrimSpace(dialog)
-	if len(dialog) > 50 {
-		dialog = dialog[:50]
+	if runes := []rune(dialog); len(runes) > 50 {
+		// Truncate by rune, not byte: a byte slice can land mid-character on
+		// multi-byte UTF-8 text (em dashes, curly quotes, accented letters),
+		// producing an invalid UTF-8 filename that breaks any consumer
+		// decoding this program's output as UTF-8 (e.g. Python's
+		// subprocess.run(..., text=True)).
+		dialog = string(runes[:50])
 	}
 
+	// Everything that changes the produced audio goes into the checksum: voice
+	// ID, TTS model, effective speed (per-speaker or per-line) and the text. A
+	// cache hit is therefore just this hash plus a lookup on disk.
 	checksum := md5.Sum([]byte(model.model + model.ttsModel + fmt.Sprintf("%f", model.speed) + item.String()))
 	template := filepath.Join(root, fmt.Sprintf("%X-%s-%s.%%s.mp3", checksum[:4], model.name, dialog))
 
 	glob := fmt.Sprintf(template, "*")
 	if files, err := filepath.Glob(glob); err == nil && len(files) > 0 {
+		chosen := files[0]
+		if len(files) > 1 {
+			if newest, err := newestFile(files); err != nil {
+				log.Printf("Warning: %d cache files match %s, but could not compare mod times (%v); using %s", len(files), glob, err, filepath.Base(chosen))
+			} else {
+				log.Printf("Warning: %d cache files match %s, using the newest: %s", len(files), glob, filepath.Base(newest))
+				chosen = newest
+			}
+		}
 		// found the previously generated file, extract the ID out of it
 		re := regexp.MustCompile(`([^.]+).mp3$`)
-		match := re.FindStringSubmatch(filepath.Base(files[0]))
+		match := re.FindStringSubmatch(filepath.Base(chosen))
 		if len(match) > 1 {
-			return Path{Path: files[0], Template: template, Id: match[1]}
+			return Path{Path: chosen, Template: template, Id: match[1]}
 		}
 	}
 
 	return Path{Template: template}
 }
 
-func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) []Item {
+// newestFile returns the path with the most recent modification time among
+// files, which must be non-empty. Used when a cache glob matches more than
+// one file -- e.g. a cache miss got regenerated with a new request ID while
+// an older file for the same voice+model+speed+text was never cleaned up --
+// so the most recently generated take is reused instead of glob's arbitrary
+// (not chronological) ordering silently picking a stale one.
+func newestFile(files []string) (string, error) {
+	newest := files[0]
+	newestModTime, err := fileModTime(newest)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range files[1:] {
+		modTime, err := fileModTime(f)
+		if err != nil {
+			return "", err
+		}
+		if modTime.After(newestModTime) {
+			newest = f
+			newestModTime = modTime
+		}
+	}
+	return newest, nil
+}
+
+func fileModTime(path string) (time.Time, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return info.ModTime(), nil
+}
+
+// canMergeCue reports whether the next cue may be folded into the current
+// merge group. Cross-voice cues never merge, regardless of gap or cap.
+// mergeThresholdMs caps the gap between the group's current end and the
+// next cue's start. mergeMaxMs (0 = unlimited) separately caps the total
+// window from the group's first start to the candidate end -- so a long
+// run of abutting same-voice lines still gets split into multiple cues
+// once folding the next one in would make the group too long.
+func canMergeCue(curSpeaker, nextSpeaker string, mergedStart, mergedEnd, nextStart, nextEnd time.Duration, mergeThresholdMs, mergeMaxMs int) bool {
+	if curSpeaker != nextSpeaker {
+		return false
+	}
+	gap := nextStart - mergedEnd
+	if gap < 0 || gap.Milliseconds() > int64(mergeThresholdMs) {
+		return false
+	}
+	if mergeMaxMs > 0 {
+		window := nextEnd - mergedStart
+		if window.Milliseconds() > int64(mergeMaxMs) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, mergeMaxMs int) []Item {
 	subs, err := astisub.OpenFile(path)
 	if err != nil {
 		log.Fatalf("Error parsing VTT file: %v", err)
@@ -319,11 +455,16 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 				} else {
 					nextSpeaker, _, _ = resolveSpeaker(next.String())
 				}
-				gap := next.StartAt - mergedEnd
-				if curSpeaker == nextSpeaker && gap.Milliseconds() >= 0 && gap.Milliseconds() <= int64(mergeLinesThresholdMs) {
-					// Merge: extend end time, concat text
+				if canMergeCue(curSpeaker, nextSpeaker, mergedStart, mergedEnd, next.StartAt, next.EndAt, mergeLinesThresholdMs, mergeMaxMs) {
+					// Merge: extend end time, concat text. Strip next's own
+					// leading speaker tag (if it has one) before folding it
+					// in -- resolveSpeaker only strips a tag anchored at the
+					// very start of a string, so without this, a tag from a
+					// merged-in line lands mid-string and is never stripped,
+					// ending up spoken literally.
+					_, nextDialogue, _ := resolveSpeaker(next.String())
 					mergedEnd = next.EndAt
-					mergedText = strings.TrimSpace(mergedText) + " " + strings.TrimSpace(next.String())
+					mergedText = strings.TrimSpace(mergedText) + " " + strings.TrimSpace(nextDialogue)
 					mergedFrom = append(mergedFrom, fmt.Sprintf("<fg=yellow>%s</> --> <fg=yellow>%s</> (duration <fg=yellow>%s</>) | <info>%s</>",
 						next.StartAt.Round(time.Millisecond),
 						next.EndAt.Round(time.Millisecond),
@@ -367,6 +508,14 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 			sub.Lines[0].Items[0].Text = dialogue
 		}
 
+		// A speaker tag may carry a per-line speed, e.g. [Matko@1.15] or, for
+		// the default speaker, [@1.15]. Split it off before looking the speaker
+		// up, so "Matko@1.15" resolves against the configured "Matko".
+		modelName, lineSpeed, hasLineSpeed, specErr := splitSpeakerSpec(modelName)
+		if specErr != nil {
+			log.Fatalf("Error in subtitle #%d: %v", i+1, specErr)
+		}
+
 		var model Model
 		if modelName != "" {
 			modelConfig, err := lookupSpeakerModel(modelName, config)
@@ -376,6 +525,13 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 			model = Model{name: modelConfig.Name, model: modelConfig.Model, offset: modelChannels[modelName], speed: modelConfig.Speed, ttsModel: resolveTTSModel(modelConfig, config)}
 		} else {
 			model = Model{name: config.Default.Name, model: config.Default.Model, offset: 0, speed: config.Default.Speed, ttsModel: resolveTTSModel(config.Default, config)}
+		}
+
+		// Applied before generatePathTemplate: the effective speed is already
+		// part of the cache checksum, so each speed of a line is its own file
+		// and every take stays on disk.
+		if hasLineSpeed {
+			model.speed = lineSpeed
 		}
 
 		item := Item{
@@ -389,6 +545,23 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs int) [
 	}
 
 	return items
+}
+
+// previousIdsFor picks the request IDs this line should stitch onto: the up
+// to `want` nearest preceding cues (within `lookback` positions) that have
+// already been generated, in timeline order regardless of speaker or speed.
+// Request stitching is what makes a multi-speaker dialogue sound continuous
+// rather than a set of disconnected monologues, so the chain always follows
+// the actual sequence of lines -- it never skips a line because it's a
+// different voice or carries a per-line @speed override.
+func previousIdsFor(items []Item, item Item, want, lookback int) []string {
+	ids := make([]string, 0, want)
+	for i := item.Sub.Index - 1; i >= 0 && item.Sub.Index-i <= lookback && len(ids) < want; i-- {
+		if id := items[i].Path.Id; id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioFile {
@@ -408,13 +581,7 @@ func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioF
 			continue
 		}
 
-		previousRequestIds := make([]string, 0)
-		for i := item.Sub.Index - 1; i >= item.Sub.Index-3; i-- {
-			if i < 0 || items[i].Path.Id == "" {
-				continue
-			}
-			previousRequestIds = append(previousRequestIds, items[i].Path.Id)
-		}
+		previousRequestIds := previousIdsFor(items, item, 3, 10)
 
 		nextRequestIds := make([]string, 0)
 		nextText := ""
@@ -487,7 +654,82 @@ func readAudioFileDuration(path string) (time.Duration, error) {
 	return time.Duration(duration * float64(time.Second)), nil
 }
 
-func generateFinalAudioFile(files []AudioFile, outputPath string) error {
+// normalizeCeilingDb and normalizeMaxBoostDb bound normalizationGain: the
+// ceiling stops a gained-up clip from clipping, and the boost cap stops a
+// near-silent or broken generation (mostly noise floor, no real signal)
+// from being amplified into audible noise instead of being left as an
+// obvious outlier for manual review.
+const (
+	normalizeCeilingDb  = -1.0
+	normalizeMaxBoostDb = 24.0
+)
+
+// decodeSamples reads every sample from an mp3 decoder's left channel (the
+// mixing loop below has only ever used the left channel of the stereo PCM
+// go-mp3 decodes to, even for a mono voice source).
+func decodeSamples(decoder *mp3.Decoder) ([]int, error) {
+	samples := make([]int, 0, decoder.Length()/4)
+	tmpBuf := make([]byte, 4096)
+	for {
+		n, err := decoder.Read(tmpBuf)
+		if n > 0 {
+			for i := 0; i < n-1; i += 4 {
+				samples = append(samples, int(int16(tmpBuf[i])|int16(tmpBuf[i+1])<<8))
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return samples, nil
+}
+
+// normalizationGain computes the linear gain to bring samples' RMS level to
+// targetDb (dBFS, negative). ElevenLabs generations vary widely in level
+// from clip to clip -- gaps of 70dB+ between cues in the same track are not
+// unusual -- so mixing them unmodified leaves some lines near-inaudible and
+// others painfully loud right next to each other.
+func normalizationGain(samples []int, targetDb float64) float64 {
+	if len(samples) == 0 {
+		return 1
+	}
+
+	var sumSquares float64
+	peak := 0
+	for _, s := range samples {
+		sumSquares += float64(s) * float64(s)
+		abs := s
+		if abs < 0 {
+			abs = -abs
+		}
+		if abs > peak {
+			peak = abs
+		}
+	}
+	if peak == 0 {
+		return 1 // true silence: nothing to normalize
+	}
+
+	const fullScale = 32768.0
+	rms := math.Sqrt(sumSquares / float64(len(samples)))
+	rmsDb := 20 * math.Log10(rms/fullScale)
+	peakDb := 20 * math.Log10(float64(peak)/fullScale)
+
+	gainDb := targetDb - rmsDb
+	if gainDb > normalizeMaxBoostDb {
+		gainDb = normalizeMaxBoostDb
+	}
+	if peakDb+gainDb > normalizeCeilingDb {
+		gainDb = normalizeCeilingDb - peakDb
+	}
+
+	return math.Pow(10, gainDb/20)
+}
+
+func generateFinalAudioFile(files []AudioFile, outputPath string, normalizeTargetDb float64) error {
 	const sampleRate = 44100
 	const bitDepth = 16
 
@@ -515,40 +757,36 @@ func generateFinalAudioFile(files []AudioFile, outputPath string) error {
 	for _, file := range files {
 		path := file.Item.Path.Path
 		f, err := os.Open(path)
-		defer f.Close()
 		if err != nil {
 			return fmt.Errorf("failed to open file %s: %w", path, err)
 		}
 
 		decoder, err := mp3.NewDecoder(f)
 		if err != nil {
+			f.Close()
 			return fmt.Errorf("failed to create decoder for %s: %w", path, err)
 		}
 
+		samples, err := decodeSamples(decoder)
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read audio data from %s: %w", path, err)
+		}
+
+		gain := 1.0
+		if normalizeTargetDb < 0 {
+			gain = normalizationGain(samples, normalizeTargetDb)
+		}
+
 		startFrame := int(file.Offset.Seconds() * float64(sampleRate))
-		tmpBuf := make([]byte, 4096)
-		currentFrame := 0
-		for {
-			n, err := decoder.Read(tmpBuf)
-			if n > 0 {
-				// Process samples in pairs of bytes (16-bit samples, 2 channels)
-				for i := 0; i < n-1; i += 4 {
-					frame := startFrame + (currentFrame / 4)
-					if frame < totalFrames {
-						sample := int(int16(tmpBuf[i]) | int16(tmpBuf[i+1])<<8)
-						pos := (frame * numChannels) + file.Channel
-						if pos < len(mixBuffer.Data) {
-							mixBuffer.Data[pos] += sample
-						}
-					}
-					currentFrame += 4
-				}
-			}
-			if err == io.EOF {
+		for i, sample := range samples {
+			frame := startFrame + i
+			if frame >= totalFrames {
 				break
 			}
-			if err != nil {
-				return fmt.Errorf("failed to read audio data: %w", err)
+			pos := (frame * numChannels) + file.Channel
+			if pos < len(mixBuffer.Data) {
+				mixBuffer.Data[pos] += int(math.Round(float64(sample) * gain))
 			}
 		}
 	}
