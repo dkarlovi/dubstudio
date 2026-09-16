@@ -313,10 +313,29 @@ Corrections to this plan discovered while executing it:
 - The "parity bridge" (section 4) is implemented as the `parity`
   subcommand in `commands/parity.go`, invoked with a fixture path and
   `--out-dir`; it writes `parity-summary.json` (`{"cues": [...],
-  "mid_cue_tag_violations": [...]}`) and never touches the network, so
-  it's safe to shell out to from the PoC's test suite despite that
-  suite's general "never shell out to the real binary" rule (see the
-  docstring in `tests/test_parity_bridge.py` in the PoC repo).
+  "mid_cue_tag_violations": [...], "mechanical_cleanup_edits": [...]}`)
+  and never touches the network, so it's safe to shell out to from the
+  PoC's test suite despite that suite's general "never shell out to the
+  real binary" rule (see the docstring in `tests/test_parity_bridge.py`
+  in the PoC repo).
+- The `parity` command's fixture arg is a positional `console.Arg`, not a
+  flag -- read it with `c.Args().Get("fixture")`, not `c.String("fixture")`
+  (found live: the command errored "Missing --fixture path" on every
+  invocation until fixed).
+- Not every item in section 8's execution order needs porting: most of it
+  (speaker resolution/tag stripping, cue merging, merge-cap, overlap
+  detection + tolerance, speed override, cache key generation, output
+  path generation) was already implemented in the Go engine before this
+  migration started (landed via PR #50). The PoC never duplicates that
+  logic itself -- it shells out to the Go binary for it. What's actually
+  missing from Go, and worth porting, is business logic the PoC's own
+  Python layer (`core.py`) implements independently: `find_midcue_tag_violations`,
+  `mechanical_cleanup`, `auto_fix_durations` (below), and, out of current
+  scope, the AI-assisted `reduce_text` (non-deterministic, an LLM call --
+  not portable in the byte-identical sense this plan requires) and the
+  Flask `app.py`/`Session` orchestration layer (CLI compat / HTTP server /
+  static assets / E2E, section 8 items 10-13 -- large, separate design
+  effort, not started).
 
 Ported features:
 
@@ -334,3 +353,45 @@ Ported features:
    - Comparison rule: exact match on `index` and `tag` per violation
      (deterministic, pure function of input text).
    - Known exceptions: none.
+
+2. **Mechanical cleanup (deterministic filler/hedge stripping)** — done.
+   - PoC source: `core.mechanical_cleanup`/`core._clean_text`, tested by
+     `tests/test_vtt_and_cleanup.py::TestMechanicalCleanup`.
+   - Go test: `TestCleanText`/`TestMechanicalCleanup` (`commands/cleanup_test.go`).
+   - Go implementation: `cleanText`/`mechanicalCleanup` (`commands/cleanup.go`).
+   - Parity bridge: `parity`'s `mechanical_cleanup_edits` field;
+     `tests/test_parity_bridge.py::TestMechanicalCleanupParity`.
+   - Comparison rule: exact match on `index` and `after` text.
+   - Known exceptions: none. Deliberately NOT wired into `run`'s default
+     pipeline -- whether/where this runs automatically in the real
+     pipeline is an app-integration decision for a later step (CLI
+     compat / HTTP server), not this one.
+
+3. **Auto-fix scheduling (real timing budgets + leading-gap absorption)** — done.
+   - PoC source: `core._real_budgets_ms`, `core._leading_gaps_ms`,
+     `core._occupied_end_ms`, `core.auto_fix_durations`, tested by
+     `tests/test_scheduling.py` (13 subtests).
+   - Go test: `TestRealBudgetsMs`/`TestAutoFixDurations`/`TestLeadingGapAbsorption`
+     (`commands/autofix_test.go`).
+   - Go implementation: `AutoFixDurations` (`commands/autofix.go`).
+   - Parity bridge: dedicated `autofix-parity` command (structured JSON
+     cues + policy config in, JSON result out -- the fixture-based
+     `parity` command doesn't fit here, since the input is already-
+     measured `audio_ms`/`overlap_flagged` data, not raw subtitle text);
+     `tests/test_parity_bridge.py::TestAutoFixDurationsParity` drives all
+     10 scheduling fixtures through both implementations.
+   - Comparison rule: exact match on `sped`/`basketed`/`retimed` entries
+     and each cue's resulting `start_ms`/`speed`/`needs_human`.
+   - Known exceptions: none. `reduce_text` (AI-assisted line shortening)
+     is explicitly NOT ported -- it's an LLM call, not deterministic
+     business logic, so it doesn't fit this plan's byte-identical parity
+     model. It stays a Python/app-layer concern.
+
+Not yet ported (real gaps, next candidates in rough priority order):
+- Nothing else deterministic and pure remains unported in `core.py`
+  outside the orchestration layer below.
+- `Session`/`save`/`load`, `generate_cues`, `export_audio`, and the Flask
+  `app.py` routes: the actual CLI-compat/HTTP-server/E2E work (section 8
+  items 10-13). This is a genuine design effort (API surface, session
+  state model), not a straight port of an existing pure function --
+  needs its own planning pass before starting.
