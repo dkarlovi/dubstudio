@@ -74,6 +74,12 @@ func (ls *LocalService) Cleanup(s *Session) []CueEdit {
 	for _, e := range edits {
 		s.Cues[e.Index-1].CurrentText = e.After
 	}
+	// Marks cleanup as done for this session, mirroring dub-studio's
+	// app.py setting Session.first_pass_report after /cleanup -- callers
+	// (e.g. the legacy frontend) use its presence to advance past the
+	// "uploaded" phase, distinct from whether any cue's text actually
+	// changed.
+	s.FirstPassReport = map[string]any{"cleanup": edits}
 	return edits
 }
 

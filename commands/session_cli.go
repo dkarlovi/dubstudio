@@ -56,8 +56,8 @@ func printJSON(c *console.Context, v any) error {
 	return nil
 }
 
-func sessionSummary(s *Session) map[string]any {
-	flagged := len(s.Flagged())
+func sessionSummary(s *Session, toleranceMs int) map[string]any {
+	flagged := len(s.Flagged(toleranceMs))
 	basket := len(s.Basket())
 	return map[string]any{
 		"name":            s.Name,
@@ -105,7 +105,7 @@ func runSessionUpload(c *console.Context) error {
 	if err := sessionStore(c).Save(session); err != nil {
 		return console.Exit(fmt.Sprintf("Error saving session: %v", err), 1)
 	}
-	return printJSON(c, sessionSummary(session))
+	return printJSON(c, sessionSummary(session, c.Int("overlap-tolerance-ms")))
 }
 
 func runSessionCleanup(c *console.Context) error {
@@ -125,7 +125,7 @@ func runSessionCleanup(c *console.Context) error {
 	if err := store.Save(session); err != nil {
 		return console.Exit(fmt.Sprintf("Error saving session: %v", err), 1)
 	}
-	out := sessionSummary(session)
+	out := sessionSummary(session, c.Int("overlap-tolerance-ms"))
 	out["last_cleanup"] = edits
 	return printJSON(c, out)
 }
@@ -150,7 +150,7 @@ func runSessionGenerate(c *console.Context) error {
 	if err := store.Save(session); err != nil {
 		return console.Exit(fmt.Sprintf("Error saving session: %v", err), 1)
 	}
-	out := sessionSummary(session)
+	out := sessionSummary(session, c.Int("overlap-tolerance-ms"))
 	out["last_run"] = result
 	return printJSON(c, out)
 }
@@ -175,7 +175,7 @@ func runSessionAutoFix(c *console.Context) error {
 	if err := store.Save(session); err != nil {
 		return console.Exit(fmt.Sprintf("Error saving session: %v", err), 1)
 	}
-	out := sessionSummary(session)
+	out := sessionSummary(session, c.Int("overlap-tolerance-ms"))
 	out["last_autofix"] = result
 	return printJSON(c, out)
 }
@@ -200,7 +200,7 @@ func runSessionExport(c *console.Context) error {
 	if err := store.Save(session); err != nil {
 		return console.Exit(fmt.Sprintf("Error saving session: %v", err), 1)
 	}
-	out := sessionSummary(session)
+	out := sessionSummary(session, c.Int("overlap-tolerance-ms"))
 	out["last_export"] = result
 	return printJSON(c, out)
 }
@@ -244,7 +244,7 @@ func runSessionShow(c *console.Context) error {
 	if session == nil {
 		return printJSON(c, map[string]any{"empty": true})
 	}
-	return printJSON(c, sessionSummary(session))
+	return printJSON(c, sessionSummary(session, c.Int("overlap-tolerance-ms")))
 }
 
 func runSessionReset(c *console.Context) error {

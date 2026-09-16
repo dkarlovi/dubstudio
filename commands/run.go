@@ -234,9 +234,35 @@ func All() []*console.Command {
 			Flags:  sessionWorkDirFlags(),
 			Action: runSessionReset,
 		},
+		{
+			Name:        "serve",
+			Usage:       "Run the HTTP API for the session workflow (upload/cleanup/generate/autofix/export)",
+			Description: "Route-for-route equivalent of dub-studio's app.py, minus /reduce (an LLM call, out of scope for this migration)",
+			Flags: append([]console.Flag{
+				&console.StringFlag{
+					Name:         "addr",
+					Usage:        "Address to listen on",
+					DefaultValue: ":8080",
+				},
+				&console.StringFlag{
+					Name:  "static-dir",
+					Usage: "Directory containing index.html (and any other static assets) to serve at / and /static/; omit to serve the JSON API only",
+				},
+				&console.StringFlag{
+					Name:  "autofix-config",
+					Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps}); built-in defaults are used if omitted",
+				},
+			}, append(sessionWorkDirFlags(), sessionGenerationFlags()...)...),
+			Action: runServe,
+		},
 	}
 }
 
+// sessionWorkDirFlags are common to every session-* command: where the
+// session lives, and the tolerance used both to gate same-voice overlaps
+// at Generate/Export time and to decide whether a cue counts as "flagged"
+// in any session summary -- dub-studio's core.py treats these as literally
+// the same constant (TOLERANCE_MS = config.OVERLAP_TOLERANCE_MS).
 func sessionWorkDirFlags() []console.Flag {
 	return []console.Flag{
 		&console.StringFlag{
@@ -244,12 +270,18 @@ func sessionWorkDirFlags() []console.Flag {
 			Usage:        "Directory holding this session's state, working VTT, and exported audio",
 			DefaultValue: ".",
 		},
+		&console.IntFlag{
+			Name:         "overlap-tolerance-ms",
+			Aliases:      []string{"t"},
+			Usage:        "Allow same-voice overlaps up to this many ms; also the threshold for a cue counting as \"flagged\"",
+			DefaultValue: 120,
+		},
 	}
 }
 
 // sessionGenerationFlags mirror dub-studio's config.py defaults
-// (MERGE_THRESHOLD_MS, MERGE_MAX_MS, OVERLAP_TOLERANCE_MS) as out-of-the-
-// box behavior for session-generate/session-export.
+// (MERGE_THRESHOLD_MS, MERGE_MAX_MS) as out-of-the-box behavior for
+// session-generate/session-export, on top of sessionWorkDirFlags.
 func sessionGenerationFlags() []console.Flag {
 	return []console.Flag{
 		&console.IntFlag{
@@ -262,12 +294,6 @@ func sessionGenerationFlags() []console.Flag {
 			Name:         "merge-max-ms",
 			Usage:        "Cap a merged cue's total window to this many ms (0 = unlimited)",
 			DefaultValue: 6300,
-		},
-		&console.IntFlag{
-			Name:         "overlap-tolerance-ms",
-			Aliases:      []string{"t"},
-			Usage:        "Allow same-voice overlaps up to this many ms",
-			DefaultValue: 120,
 		},
 		&console.IntFlag{
 			Name:         "normalize-target-db",

@@ -44,10 +44,11 @@ func (c *SessionCue) Dirty() bool {
 // Session is dub-studio's app-level unit of work: one uploaded subtitle
 // file, tracked through cleanup/generate/autofix/export.
 type Session struct {
-	Name          string        `json:"name"`
-	Cues          []*SessionCue `json:"cues"`
-	RunCount      int           `json:"run_count"`
-	ExportWavPath string        `json:"export_wav_path"`
+	Name            string         `json:"name"`
+	Cues            []*SessionCue  `json:"cues"`
+	RunCount        int            `json:"run_count"`
+	ExportWavPath   string         `json:"export_wav_path"`
+	FirstPassReport map[string]any `json:"first_pass_report,omitempty"`
 }
 
 // Generated reports whether Generate has ever run (any cue has a measured
@@ -61,9 +62,13 @@ func (s *Session) Generated() bool {
 	return false
 }
 
-func (s *Session) Flagged() []*SessionCue {
+// Flagged returns cues whose measured overage exceeds toleranceMs -- the
+// same tolerance the engine's own overlap detection uses (dub-studio's
+// core.py treats these as literally the same constant, TOLERANCE_MS =
+// config.OVERLAP_TOLERANCE_MS).
+func (s *Session) Flagged(toleranceMs int) []*SessionCue {
 	return filterCues(s.Cues, func(c *SessionCue) bool {
-		return c.AudioMs != nil && c.OverageMs() > 0
+		return c.AudioMs != nil && c.OverageMs() > toleranceMs
 	})
 }
 
