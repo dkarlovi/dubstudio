@@ -252,7 +252,7 @@ func All() []*console.Command {
 				},
 				&console.StringFlag{
 					Name:  "static-dir",
-					Usage: "Directory containing index.html (and any other static assets) to serve at / and /static/; omit to serve the JSON API only",
+					Usage: "Directory containing an index.html (and any other static assets) to serve at / and /static/ instead of the built-in embedded frontend; only useful for iterating on the frontend locally without a rebuild",
 				},
 				&console.StringFlag{
 					Name:  "autofix-config",

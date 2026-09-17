@@ -23,6 +23,11 @@ import (
 //
 // Like app.py, this holds a single global session in memory (not
 // multi-tenant), persisted through store after every mutating call.
+//
+// The frontend itself is embedded (embeddedIndexHTML, see webassets.go) so
+// this binary is fully self-contained and needs no ~/dub-studio checkout at
+// runtime; staticDir, when set, overrides that with a directory on disk --
+// only useful for iterating on the frontend locally without a rebuild.
 type httpServer struct {
 	mu      sync.Mutex
 	session *Session
@@ -62,8 +67,8 @@ func (h *httpServer) mux() *http.ServeMux {
 	mux.HandleFunc("GET /export/download", h.handleExportDownload)
 	mux.HandleFunc("POST /reset", h.handleReset)
 
+	mux.HandleFunc("GET /{$}", h.handleIndex)
 	if h.staticDir != "" {
-		mux.HandleFunc("GET /{$}", h.handleIndex)
 		mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(h.staticDir))))
 	}
 	return mux
@@ -84,8 +89,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"detail": message})
 }
 
+// handleIndex serves the frontend: from staticDir when explicitly given
+// (local dev iteration on a working copy of the frontend without a
+// rebuild), otherwise the embedded default, which is what makes this
+// binary self-contained -- no ~/dub-studio checkout required at runtime.
 func (h *httpServer) handleIndex(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, filepath.Join(h.staticDir, "index.html"))
+	if h.staticDir != "" {
+		http.ServeFile(w, r, filepath.Join(h.staticDir, "index.html"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(embeddedIndexHTML)
 }
 
 func (h *httpServer) handleGetSession(w http.ResponseWriter, r *http.Request) {

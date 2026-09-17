@@ -1,6 +1,50 @@
 package commands
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestHandleIndex(t *testing.T) {
+	t.Run("serves the embedded frontend by default, no static-dir needed", func(t *testing.T) {
+		h, err := newHTTPServer(nil, &FileSessionStore{Dir: t.TempDir()}, "", 0, 0)
+		if err != nil {
+			t.Fatalf("newHTTPServer error: %v", err)
+		}
+
+		w := httptest.NewRecorder()
+		h.mux().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "<title>Dub Studio</title>") {
+			t.Errorf("body doesn't look like the embedded frontend: %.100s...", w.Body.String())
+		}
+	})
+
+	t.Run("static-dir overrides the embedded default when set", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<title>Local Dev Copy</title>"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		h, err := newHTTPServer(nil, &FileSessionStore{Dir: t.TempDir()}, dir, 0, 0)
+		if err != nil {
+			t.Fatalf("newHTTPServer error: %v", err)
+		}
+
+		w := httptest.NewRecorder()
+		h.mux().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+
+		if !strings.Contains(w.Body.String(), "Local Dev Copy") {
+			t.Errorf("body = %q, want the static-dir override served instead of the embedded default", w.Body.String())
+		}
+	})
+}
 
 func TestCueDTO(t *testing.T) {
 	t.Run("voice is lowercased for the legacy frontend's hardcoded matko/hana check", func(t *testing.T) {

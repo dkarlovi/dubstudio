@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dub Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1720; --panel:#17212e; --panel-2:#1d2937; --line:#27343f;
+    --text:#e6edf3; --muted:#8ea0b0; --faint:#5b6b7a;
+    --free:#4ec9a0; --free-soft:rgba(78,201,160,.14);
+    --cost:#e6ad55; --cost-soft:rgba(230,173,85,.14);
+    --basket:#b48ce8; --basket-soft:rgba(180,140,232,.14);
+    --over:#e58a72;
+    --display:'Space Grotesk',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --body:system-ui,-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg); color:var(--text); font-family:var(--body); line-height:1.5;
+       -webkit-font-smoothing:antialiased; min-height:100vh; padding:24px;}
+  .wrap{max-width:1080px; margin:0 auto}
+  a{color:inherit}
+
+  .topbar{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px}
+  .brand{display:flex; align-items:baseline; gap:10px}
+  .brand h1{font-family:var(--display); font-weight:700; font-size:20px; letter-spacing:-.01em; margin:0}
+  .badge{font-family:var(--mono); font-size:11px; font-weight:600; border-radius:4px; padding:1px 6px; letter-spacing:.04em}
+  .badge.mock{color:var(--cost); border:1px solid var(--cost)}
+  .badge.real{color:var(--free); border:1px solid var(--free)}
+  .brand .sub{color:var(--faint); font-size:12.5px}
+
+  .firewall{display:flex; align-items:center; gap:12px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:9px 13px}
+  .firewall .lab{font-family:var(--mono); font-size:11px; color:var(--muted); letter-spacing:.03em}
+  .firewall .lab b{color:var(--text)}
+  .meter{display:flex; gap:3px}
+  .seg{width:9px; height:16px; border-radius:2px; background:#2a3946; transition:background .25s}
+  .seg.on{background:var(--cost)}
+  .seg.last{box-shadow:0 0 0 1px var(--cost), 0 0 8px var(--cost-soft)}
+
+  /* you-are-here banner */
+  .here{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:16px; display:flex; gap:16px; align-items:center}
+  .here .step-of{font-family:var(--mono); font-size:11px; color:var(--faint); letter-spacing:.06em; text-transform:uppercase}
+  .here h2{font-family:var(--display); font-size:19px; margin:2px 0 3px; font-weight:600}
+  .here p{margin:0; color:var(--muted); font-size:13.5px}
+  .here .tag{margin-left:auto; font-family:var(--mono); font-size:11px; padding:4px 9px; border-radius:6px; white-space:nowrap}
+  .tag.free{background:var(--free-soft); color:var(--free); border:1px solid var(--free)}
+  .tag.cost{background:var(--cost-soft); color:var(--cost); border:1px solid var(--cost)}
+  .tag.done{background:var(--basket-soft); color:var(--basket); border:1px solid var(--basket)}
+
+  .grid{display:grid; grid-template-columns:1fr 292px; gap:18px}
+  @media(max-width:840px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px}
+
+  .pile-head{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:2px}
+  .pile-head h3{font-family:var(--display); font-size:15px; font-weight:600; margin:0}
+  .count{font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .status{font-size:12.5px; color:var(--muted); margin:6px 0 14px; min-height:18px}
+  .status .n{color:var(--text); font-weight:600}
+  .status.free{color:var(--free)} .status.cost{color:var(--cost)}
+
+  .cue{display:grid; grid-template-columns:auto 1fr auto; gap:12px; align-items:start;
+       padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); margin-bottom:8px}
+  .cue .id{font-family:var(--mono); font-size:11.5px; color:var(--faint); padding-top:2px}
+  .who{font-family:var(--mono); font-size:10px; padding:1px 6px; border-radius:4px; border:1px solid var(--line); color:var(--muted); margin-right:8px}
+  .who.matko{color:var(--basket); border-color:var(--basket)}
+  .cue .txt{font-size:13.5px}
+  .cue .over{font-family:var(--mono); font-size:11.5px; white-space:nowrap; color:var(--over); padding-top:2px}
+  .cue.est .over{color:var(--cost)}
+  .cue.basket{border-color:var(--basket); background:var(--basket-soft)}
+  .cue.basket .over{color:var(--basket)}
+  .reason{font-size:12px; color:var(--basket); margin-top:6px}
+  .editor{margin-top:8px; display:none}
+  .editor.show{display:block}
+  .editor textarea{width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line);
+       border-radius:8px; padding:8px 10px; font-family:var(--body); font-size:13px; resize:vertical; min-height:52px}
+  .editor .row{display:flex; gap:8px; margin-top:7px; align-items:center}
+  .mini{font-family:var(--mono); font-size:11px; padding:6px 11px; border-radius:7px; border:1px solid var(--line); background:var(--panel-2); color:var(--text); cursor:pointer}
+  .mini.go{border-color:var(--basket); color:var(--basket)}
+  .mini:hover{border-color:var(--muted)}
+  .link{background:none; border:none; color:var(--basket); font-family:var(--mono); font-size:11px; cursor:pointer; padding:0}
+
+  .empty{text-align:center; padding:44px 16px; color:var(--faint); border:1px dashed var(--line); border-radius:12px}
+  .empty .big{font-family:var(--display); font-size:15px; color:var(--muted); margin-bottom:4px}
+
+  .rail h3{font-family:var(--display); font-size:13px; font-weight:600; color:var(--muted); margin:0 0 12px; letter-spacing:.02em; text-transform:uppercase}
+  .step{width:100%; text-align:left; cursor:pointer; border:1px solid var(--line); border-radius:11px; background:var(--panel-2);
+        color:var(--text); padding:13px 14px; margin-bottom:10px; display:flex; align-items:center; gap:11px;
+        font-family:var(--body); transition:opacity .25s, transform .1s, box-shadow .25s, border-color .25s; opacity:.34; filter:saturate(.5)}
+  .step:disabled{cursor:not-allowed}
+  .step .dot{width:9px; height:9px; border-radius:50%; background:var(--faint); flex:none}
+  .step .body{flex:1}
+  .step .name{font-family:var(--display); font-size:14px; font-weight:600}
+  .step .cost{display:block; font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:2px}
+  .step .pill{font-family:var(--mono); font-size:10.5px; font-weight:600; padding:2px 7px; border-radius:5px; white-space:nowrap}
+  .step.active{opacity:1; filter:none}
+  .step.active:hover{transform:translateY(-1px)}
+  .step.free.active{border-color:var(--free); box-shadow:0 0 0 1px var(--free)}
+  .step.free.active .dot{background:var(--free); box-shadow:0 0 9px var(--free)} .step.free.active .cost{color:var(--free)}
+  .step.cost.active{border-color:var(--cost); box-shadow:0 0 0 1px var(--cost)}
+  .step.cost.active .dot{background:var(--cost); box-shadow:0 0 9px var(--cost)} .step.cost.active .cost{color:var(--cost)}
+  .step.cost.active .pill{background:var(--cost-soft); color:var(--cost); border:1px solid var(--cost)}
+  .step.done.active{border-color:var(--basket); box-shadow:0 0 0 1px var(--basket)}
+  .step.done.active .dot{background:var(--basket); box-shadow:0 0 9px var(--basket)} .step.done.active .cost{color:var(--basket)}
+  #file{display:none}
+
+  .legend{border-top:1px solid var(--line); margin-top:14px; padding-top:14px}
+  .legend .row{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--muted); margin-bottom:7px}
+  .legend .sw{width:11px; height:11px; border-radius:3px; flex:none}
+  .reset{margin-top:6px; width:100%; background:none; border:1px solid var(--line); color:var(--muted); border-radius:9px; padding:9px; cursor:pointer; font-family:var(--mono); font-size:11.5px}
+  .reset:hover{color:var(--text); border-color:var(--muted)}
+  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 16px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <h1>Dub Studio</h1>
+      <span class="badge mock" id="mode-badge">MOCK</span>
+      <span class="sub" id="video-name"></span>
+    </div>
+    <div class="firewall">
+      <span class="lab">Runs used <b id="runN">0</b> / <span id="cap">10</span></span>
+      <div class="meter" id="meter"></div>
+    </div>
+  </div>
+
+  <div class="here" id="here">
+    <div>
+      <div class="step-of" id="here-step">Step 1 of 4</div>
+      <h2 id="here-title">Upload your English VTT</h2>
+      <p id="here-desc">Load the file to see which lines are likely to run long.</p>
+    </div>
+    <span class="tag free" id="here-tag">free</span>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="pile-head">
+        <h3>Lines that need attention</h3>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="status" id="status"></div>
+      <div id="pile"></div>
+    </div>
+
+    <div class="panel rail">
+      <h3>What to do next</h3>
+
+      <button class="step free" id="s-upload" onclick="pickFile()">
+        <span class="dot"></span><span class="body"><span class="name">Upload English VTT</span><span class="cost">free · loads your file</span></span>
+      </button>
+      <input type="file" id="file" accept=".vtt,.srt" onchange="doUpload(this)">
+
+      <button class="step free" id="s-clean" onclick="call('/cleanup','Cleaned up text')" disabled>
+        <span class="dot"></span><span class="body"><span class="name">Clean up text</span><span class="cost">free · fillers, hedges</span></span>
+      </button>
+
+      <button class="step cost" id="s-gen" onclick="call('/generate','Generated')" disabled>
+        <span class="dot"></span><span class="body"><span class="name">Generate</span><span class="cost">spends credits · real durations</span></span>
+        <span class="pill" id="gen-pill">Run 1/10</span>
+      </button>
+
+      <button class="step free" id="s-fix" onclick="call('/autofix','Auto-fixed durations')" disabled>
+        <span class="dot"></span><span class="body"><span class="name">Auto-fix durations</span><span class="cost">free · speed + basket</span></span>
+      </button>
+
+      <button class="step cost" id="s-reduce" onclick="call('/reduce','AI shortening pass')" disabled>
+        <span class="dot"></span><span class="body"><span class="name">Reduce text (AI)</span><span class="cost">spends · Claude API, not ElevenLabs</span></span>
+      </button>
+
+      <button class="step done" id="s-export" onclick="call('/export','Exported')" disabled>
+        <span class="dot"></span><span class="body"><span class="name">Export</span><span class="cost">finish this file</span></span>
+      </button>
+      <a class="mini" id="download-link" href="/export/download" style="display:none; text-align:center; text-decoration:none; margin:-4px 0 10px">⬇ Download WAV</a>
+
+      <div class="legend">
+        <div class="row"><span class="sw" style="background:var(--free)"></span> free — run as often as you like</div>
+        <div class="row"><span class="sw" style="background:var(--cost)"></span> spends credits — counts against your cap</div>
+        <div class="row"><span class="sw" style="background:var(--basket)"></span> your basket — a real judgment call</div>
+        <button class="reset" onclick="doReset()">↺ start over</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let S = null;   // last session dict
+
+const PHASES = {
+  empty:     {step:"Step 1 of 4", title:"Upload your English VTT", desc:"Load the file to see which lines are likely to run long.", tag:"free",  lit:"s-upload"},
+  uploaded:  {step:"Step 2 of 4", title:"Clean up the text",       desc:"Free mechanical pass — cut fillers and hedges before spending anything. Line merging happens automatically at Generate.", tag:"free", lit:"s-clean"},
+  cleaned:   {step:"Step 3 of 4", title:"Generate real durations", desc:"This is the one paid step. It replaces the pessimistic estimate with true lengths from ElevenLabs.", tag:"cost", lit:"s-gen"},
+  generated: {step:"Step 4 of 4", title:"Auto-fix what fits cleanly", desc:"Free. Modest speed bumps for moderate overlaps; anything genuinely too long goes to your basket.", tag:"free", lit:"s-fix"},
+  loop:      {step:"Loop", title:"Generate again to re-check", desc:"You changed some lines. Regenerate — only the lines that changed get re-billed.", tag:"cost", lit:"s-gen"},
+  reduce:    {step:"Optional", title:"Let AI take a pass at your basket", desc:"Claude drafts a shortened version of each basket line, sized to fit. Confident cuts apply automatically; anything it declines stays in your basket with its attempt attached. Spends on a separate Claude API key, not ElevenLabs credits — or skip straight to Export.", tag:"cost", lit:"s-reduce", alsoEnabled:["s-export"]},
+  done:      {step:"Done", title:"This file is ready", desc:"Everything fits, or the rest is in your basket. Export when you're happy.", tag:"done", lit:"s-export"},
+};
+
+function phaseOf(s){
+  if(!s || s.empty) return "empty";
+  const cleaned = s.first_pass_report && s.first_pass_report.cleanup;
+  if(!cleaned) return "uploaded";
+  if(!s.generated) return "cleaned";
+  const dirty = s.cues.filter(c=>c.dirty).length;
+  const openFlags = s.cues.filter(c=>(c.flagged || c.overlap_flagged) && !c.needs_human).length;
+  if(dirty > 0) return "loop";
+  if(openFlags > 0) return "generated";
+  return s.counts.basket > 0 ? "reduce" : "done";
+}
+
+async function refresh(){
+  const r = await fetch('/session'); S = await r.json(); render();
+}
+
+function render(){
+  const mode = (S && S.mode) || 'mock';
+  const badge = document.getElementById('mode-badge');
+  badge.textContent = mode.toUpperCase(); badge.className = 'badge ' + mode;
+  document.getElementById('video-name').textContent = (S && S.name) ? '· ' + S.name : '';
+
+  const runs = (S && S.run_count) || 0;
+  const cap = (S && S.cap) || 10;
+  document.getElementById('runN').textContent = runs;
+  document.getElementById('cap').textContent = cap;
+  document.getElementById('gen-pill').textContent = 'Run ' + (runs+1) + '/' + cap;
+  const meter = document.getElementById('meter'); meter.innerHTML='';
+  for(let i=0;i<cap;i++){ const d=document.createElement('div');
+    d.className='seg'+(i<runs?' on':'')+(i===runs-1?' last':''); meter.appendChild(d); }
+
+  const phase = phaseOf(S);
+  const p = PHASES[phase];
+  document.getElementById('here-step').textContent = p.step;
+  document.getElementById('here-title').textContent = p.title;
+  document.getElementById('here-desc').textContent = p.desc;
+  const tag = document.getElementById('here-tag'); tag.textContent = p.tag; tag.className = 'tag ' + p.tag;
+
+  ['s-upload','s-clean','s-gen','s-fix','s-reduce','s-export'].forEach(id=>{
+    const el=document.getElementById(id); const on = id===p.lit || (p.alsoEnabled||[]).includes(id);
+    el.classList.toggle('active', on); el.disabled = !on;
+  });
+
+  const dl = document.getElementById('download-link');
+  dl.style.display = (S && S.export_wav_path) ? 'block' : 'none';
+
+  renderPile(phase);
+}
+
+function renderPile(phase){
+  const pile=document.getElementById('pile'), status=document.getElementById('status'), count=document.getElementById('count');
+  if(!S || S.empty || !Array.isArray(S.cues)){
+    pile.innerHTML='<div class="empty"><div class="big">Nothing loaded yet.</div>Upload your English VTT to begin.</div>';
+    status.textContent=''; status.className='status'; count.textContent=''; return;
+  }
+  const c = S.counts;
+  const mode = S.mode || 'mock';
+  const preGen = !S.generated;
+  // which cues to show
+  let show;
+  if(preGen) show = S.cues.filter(x=>x.est_flagged);
+  else show = S.cues.filter(x=>x.flagged || x.needs_human || x.overlap_flagged);
+
+  count.textContent = c.total + ' cues · ' + c.cleared + ' fitting';
+
+  // status line
+  if(phase==='uploaded'){
+    if(mode==='real'){
+      status.className='status'; status.innerHTML =
+        'No free duration estimate in real mode — real numbers come from Generate.';
+    } else {
+      status.className='status'; status.innerHTML =
+        'Estimate only — <span class="n">'+c.est_flagged+'</span> lines look long. This guess runs pessimistic; real numbers come after Generate.';
+    }
+  } else if(phase==='cleaned'){
+    if(mode==='real'){
+      status.className='status free'; status.innerHTML =
+        'Cleanup done, for free. Generate to get real durations from the engine.';
+    } else {
+      status.className='status free'; status.innerHTML =
+        'Cleanup done, for free. <span class="n">'+c.est_flagged+'</span> still look long on the estimate — Generate to find out for real.';
+    }
+  } else if(phase==='generated'){
+    status.className='status cost'; status.innerHTML =
+      'Real durations in. <span class="n">'+(c.flagged - c.basket)+'</span> lines genuinely run long — the phantom flags are gone.';
+  } else if(phase==='loop'){
+    status.className='status'; const dirty=S.cues.filter(x=>x.dirty).length; status.innerHTML =
+      'Auto-fix adjusted <span class="n">'+dirty+'</span> line(s). Generate again — only those get re-billed.';
+  } else if(phase==='reduce'){
+    status.className='status cost'; const rd=S.last_reduce;
+    status.innerHTML = rd
+      ? 'AI shortened <span class="n">'+rd.shortened.length+'</span>, declined <span class="n">'+rd.declined.length+'</span> — still in your basket. Run it again after editing, or export as-is.'
+      : '<span class="n">'+c.basket+'</span> in your basket. Let Claude draft a shortened version of each, or skip straight to Export.';
+  } else if(phase==='done'){
+    const done = S.last_export ? 'Exported ✓ — ' : '';
+    if(c.basket) { status.className='status'; status.innerHTML =
+      done+'Pipeline did its part. <span class="n">'+c.basket+'</span> in your basket — real judgment calls, never auto-applied.'; }
+    else { status.className='status free'; status.innerHTML=done+'All lines fit. Nothing left for you.'; }
+  } else { status.textContent=''; status.className='status'; }
+
+  if(!show.length){
+    const big = (preGen && mode==='real') ? 'Nothing to check yet.' : 'Clear.';
+    const msg = (preGen && mode==='real') ? 'No estimate in real mode — Generate to see real durations.' : 'No lines need attention right now.';
+    pile.innerHTML = '<div class="empty"><div class="big">'+big+'</div>'+msg+'</div>'; return;
+  }
+
+  pile.innerHTML='';
+  show.forEach(cue=>{
+    const row=document.createElement('div');
+    row.className='cue'+(cue.needs_human?' basket':(preGen?' est':''));
+    let over='';
+    if(cue.needs_human) over='basket';
+    else if(preGen) over='+'+cue.est_overage_ms+' ms est';
+    else if(cue.overlap_flagged) over='overlap';
+    else over='+'+cue.overage_ms+' ms';
+    const whoClass = cue.voice==='matko' ? 'who matko' : 'who';
+    const whoLabel = cue.voice==='matko' ? 'Matko' : 'Hana';
+    row.innerHTML =
+      '<span class="id">#'+cue.index+'</span>'+
+      '<span class="txt"><span class="'+whoClass+'">'+whoLabel+'</span>'+esc(cue.current_text)+
+        (cue.needs_human?'<div class="reason">'+esc(cue.human_reason)+'</div>':'')+
+        (cue.needs_human && cue.ai_suggestion?'<div class="reason" style="color:var(--muted)">AI tried: “'+esc(cue.ai_suggestion)+'” — '+esc(cue.ai_note)+'</div>':'')+
+        (cue.needs_human?'<button class="link" onclick="toggleEd('+cue.index+')">edit this line ▸</button>':'')+
+        (cue.needs_human && cue.ai_suggestion?' <button class="link" onclick="useSuggestion('+cue.index+')">start from AI draft ▸</button>':'')+
+        '<div class="editor" id="ed-'+cue.index+'"><textarea id="ta-'+cue.index+'">'+esc(cue.current_text)+'</textarea>'+
+          '<div class="row"><button class="mini go" onclick="saveCue('+cue.index+')">Save &amp; mark for regenerate</button>'+
+          '<button class="mini" onclick="toggleEd('+cue.index+')">cancel</button></div></div>'+
+      '</span>'+
+      '<span class="over">'+over+'</span>';
+    pile.appendChild(row);
+  });
+}
+
+function esc(s){ return (s||'').replace(/[&<>"]/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch])); }
+
+// ---- actions ----
+function pickFile(){ document.getElementById('file').click(); }
+async function doUpload(input){
+  const f = input.files[0]; if(!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/upload',{method:'POST',body:fd});
+  if(!r.ok){ toast('Upload failed: '+(await r.text())); return; }
+  S = await r.json(); render(); toast('Loaded ' + f.name);
+  input.value='';
+}
+async function call(url, okMsg){
+  const r = await fetch(url,{method:'POST'});
+  if(r.status===429){ toast('⛔ ' + (await r.json()).detail); await refresh(); return; }
+  if(r.status===409){ toast('⚠ ' + (await r.json()).detail); await refresh(); return; }
+  if(!r.ok){ let msg; try{ msg=(await r.json()).detail; }catch(e){ msg=await r.text(); } toast('Failed: '+msg); return; }
+  S = await r.json(); render();
+  let extra='';
+  if(url==='/generate' && S.last_run){ const g=S.last_run;
+    extra = g.generated.length ? ' · billed '+g.generated.length+', cached '+g.skipped_cached : ' · nothing changed, 0 credits';
+    if(g.overlap_conflict) extra += ' · overlaps still block export'; }
+  if(url==='/autofix' && S.last_autofix){ const a=S.last_autofix;
+    extra = ' · sped '+a.sped.length+', basket '+a.basketed.length;
+    if(a.retimed && a.retimed.length) extra += ', retimed '+a.retimed.length; }
+  if(url==='/reduce' && S.last_reduce){ const rd=S.last_reduce;
+    extra = ' · shortened '+rd.shortened.length+', declined '+rd.declined.length; }
+  if(url==='/export' && S.last_export){
+    extra = S.last_export.wav_path ? ' · WAV ready to download' : ' · manifest written to work/export_manifest.json'; }
+  toast(okMsg + extra);
+}
+function toggleEd(i){ document.getElementById('ed-'+i).classList.toggle('show'); }
+function useSuggestion(i){
+  const cue = S.cues.find(c=>c.index===i); if(!cue) return;
+  document.getElementById('ed-'+i).classList.add('show');
+  document.getElementById('ta-'+i).value = cue.ai_suggestion;
+}
+async function saveCue(i){
+  const text = document.getElementById('ta-'+i).value;
+  const r = await fetch('/cue/'+i,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+  if(!r.ok){ toast('Save failed'); return; }
+  await refresh(); toast('Saved #'+i+' — Generate again to re-check it');
+}
+async function doReset(){
+  await fetch('/reset',{method:'POST'}); await refresh(); toast('Session cleared');
+}
+let toastT;
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),3200); }
+
+refresh();
+</script>
+</body>
+</html>
