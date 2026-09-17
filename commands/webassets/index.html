@@ -14,7 +14,7 @@
     --free:#4ec9a0; --free-soft:rgba(78,201,160,.14);
     --cost:#e6ad55; --cost-soft:rgba(230,173,85,.14);
     --basket:#b48ce8; --basket-soft:rgba(180,140,232,.14);
-    --over:#e58a72;
+    --over:#e58a72; --over-soft:rgba(229,138,114,.14);
     --display:'Space Grotesk',system-ui,sans-serif;
     --mono:'JetBrains Mono',ui-monospace,monospace;
     --body:system-ui,-apple-system,'Segoe UI',sans-serif;
@@ -73,7 +73,10 @@
   .cue.est .over{color:var(--cost)}
   .cue.basket{border-color:var(--basket); background:var(--basket-soft)}
   .cue.basket .over{color:var(--basket)}
+  .cue.skipped{border-style:dashed; opacity:.6}
+  .cue.skipped .over{color:var(--faint)}
   .reason{font-size:12px; color:var(--basket); margin-top:6px}
+  .cue .actions{display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:8px}
   .editor{margin-top:8px; display:none}
   .editor.show{display:block}
   .editor textarea{width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line);
@@ -108,13 +111,32 @@
   .step.done.active .dot{background:var(--basket); box-shadow:0 0 9px var(--basket)} .step.done.active .cost{color:var(--basket)}
   #file{display:none}
 
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{opacity:1} 50%{opacity:.55}}
+  .step .spinner{display:none; width:11px; height:11px; margin-left:7px; flex:none;
+       border:2px solid var(--faint); border-top-color:var(--text); border-radius:50%; animation:spin .7s linear infinite; vertical-align:-2px}
+  .step.busy{opacity:1 !important; filter:none !important; pointer-events:none; animation:pulse 1.1s ease-in-out infinite}
+  .step.busy .spinner{display:inline-block}
+  .busy-global .step:not(.busy){pointer-events:none}
+  .mini:disabled{opacity:.5; cursor:not-allowed}
+
   .legend{border-top:1px solid var(--line); margin-top:14px; padding-top:14px}
   .legend .row{display:flex; align-items:center; gap:9px; font-size:11.5px; color:var(--muted); margin-bottom:7px}
   .legend .sw{width:11px; height:11px; border-radius:3px; flex:none}
   .reset{margin-top:6px; width:100%; background:none; border:1px solid var(--line); color:var(--muted); border-radius:9px; padding:9px; cursor:pointer; font-family:var(--mono); font-size:11.5px}
   .reset:hover{color:var(--text); border-color:var(--muted)}
-  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 16px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none}
+  .toast{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); max-width:min(560px,calc(100vw - 32px));
+       display:flex; align-items:flex-start; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:10px;
+       padding:10px 12px 10px 16px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none}
   .toast.show{opacity:1}
+  .toast .msg{white-space:pre-wrap; word-break:break-word; padding-top:1px}
+  .toast-close{display:none; flex:none; background:none; border:none; color:var(--muted); cursor:pointer;
+       font-family:var(--mono); font-size:14px; line-height:1; padding:2px 4px; pointer-events:auto}
+  .toast-close:hover{color:var(--text)}
+  .toast.sticky .toast-close{display:block}
+  .toast.error{border-color:var(--over); background:var(--over-soft)}
+  .toast.error .toast-close{color:var(--over)}
+  .toast.error .toast-close:hover{color:var(--text)}
 </style>
 </head>
 <body>
@@ -154,29 +176,25 @@
       <h3>What to do next</h3>
 
       <button class="step free" id="s-upload" onclick="pickFile()">
-        <span class="dot"></span><span class="body"><span class="name">Upload English VTT</span><span class="cost">free · loads your file</span></span>
+        <span class="dot"></span><span class="body"><span class="name">Upload English VTT</span><span class="cost">free · loads your file</span></span><span class="spinner" aria-hidden="true"></span>
       </button>
       <input type="file" id="file" accept=".vtt,.srt" onchange="doUpload(this)">
 
       <button class="step free" id="s-clean" onclick="call('/cleanup','Cleaned up text')" disabled>
-        <span class="dot"></span><span class="body"><span class="name">Clean up text</span><span class="cost">free · fillers, hedges</span></span>
+        <span class="dot"></span><span class="body"><span class="name">Clean up text</span><span class="cost">free · fillers, hedges</span></span><span class="spinner" aria-hidden="true"></span>
       </button>
 
       <button class="step cost" id="s-gen" onclick="call('/generate','Generated')" disabled>
-        <span class="dot"></span><span class="body"><span class="name">Generate</span><span class="cost">spends credits · real durations</span></span>
-        <span class="pill" id="gen-pill">Run 1/10</span>
-      </button>
-
-      <button class="step free" id="s-fix" onclick="call('/autofix','Auto-fixed durations')" disabled>
-        <span class="dot"></span><span class="body"><span class="name">Auto-fix durations</span><span class="cost">free · speed + basket</span></span>
+        <span class="dot"></span><span class="body"><span class="name">Generate</span><span class="cost">spends credits · real durations + auto speed-fix</span></span>
+        <span class="pill" id="gen-pill">Run 1/10</span><span class="spinner" aria-hidden="true"></span>
       </button>
 
       <button class="step cost" id="s-reduce" onclick="call('/reduce','AI shortening pass')" disabled>
-        <span class="dot"></span><span class="body"><span class="name">Reduce text (AI)</span><span class="cost">spends · Claude API, not ElevenLabs</span></span>
+        <span class="dot"></span><span class="body"><span class="name">Reduce text (AI)</span><span class="cost">spends · Claude API, not ElevenLabs</span></span><span class="spinner" aria-hidden="true"></span>
       </button>
 
       <button class="step done" id="s-export" onclick="call('/export','Exported')" disabled>
-        <span class="dot"></span><span class="body"><span class="name">Export</span><span class="cost">finish this file</span></span>
+        <span class="dot"></span><span class="body"><span class="name">Export</span><span class="cost">finish this file</span></span><span class="spinner" aria-hidden="true"></span>
       </button>
       <a class="mini" id="download-link" href="/export/download" style="display:none; text-align:center; text-decoration:none; margin:-4px 0 10px">⬇ Download WAV</a>
 
@@ -189,19 +207,24 @@
     </div>
   </div>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast"><span class="msg" id="toast-msg"></span><button class="toast-close" id="toast-close" onclick="dismissToast()" aria-label="Dismiss">✕</button></div>
 
 <script>
 let S = null;   // last session dict
 
+// AutoFix (speed bumping) is no longer a separate manual step (see
+// MIGRATION_PLAN.md, 2026-09-18 redesign) -- Generate now runs it
+// automatically, looping internally until everything either fits or is
+// genuinely basketed, so there's no "generated but not yet auto-fixed"
+// phase to represent here anymore. What's left flagged after Generate
+// returns is always a real Reduce/edit/skip candidate.
 const PHASES = {
   empty:     {step:"Step 1 of 4", title:"Upload your English VTT", desc:"Load the file to see which lines are likely to run long.", tag:"free",  lit:"s-upload"},
   uploaded:  {step:"Step 2 of 4", title:"Clean up the text",       desc:"Free mechanical pass — cut fillers and hedges before spending anything. Line merging happens automatically at Generate.", tag:"free", lit:"s-clean"},
-  cleaned:   {step:"Step 3 of 4", title:"Generate real durations", desc:"This is the one paid step. It replaces the pessimistic estimate with true lengths from ElevenLabs.", tag:"cost", lit:"s-gen"},
-  generated: {step:"Step 4 of 4", title:"Auto-fix what fits cleanly", desc:"Free. Modest speed bumps for moderate overlaps; anything genuinely too long goes to your basket.", tag:"free", lit:"s-fix"},
-  loop:      {step:"Loop", title:"Generate again to re-check", desc:"You changed some lines. Regenerate — only the lines that changed get re-billed.", tag:"cost", lit:"s-gen"},
-  reduce:    {step:"Optional", title:"Let AI take a pass at your basket", desc:"Claude drafts a shortened version of each basket line, sized to fit. Confident cuts apply automatically; anything it declines stays in your basket with its attempt attached. Spends on a separate Claude API key, not ElevenLabs credits — or skip straight to Export.", tag:"cost", lit:"s-reduce", alsoEnabled:["s-export"]},
-  done:      {step:"Done", title:"This file is ready", desc:"Everything fits, or the rest is in your basket. Export when you're happy.", tag:"done", lit:"s-export"},
+  cleaned:   {step:"Step 3 of 4", title:"Generate real durations", desc:"The one paid step. Sends every line to ElevenLabs, then automatically speeds up anything that runs a little long. You'll only see what's genuinely still too long afterward.", tag:"cost", lit:"s-gen"},
+  loop:      {step:"Loop", title:"Generate again to verify", desc:"You changed some lines (AI-shortened or hand-edited). Regenerate — only those get re-billed, and the automatic speed pass re-checks everything again.", tag:"cost", lit:"s-gen"},
+  reduce:    {step:"Step 4 of 4", title:"Let AI take a pass at what's still too long", desc:"Claude drafts a shortened version of each remaining line, sized to fit. Confident cuts apply automatically; anything it declines stays flagged with its attempt attached. Edit a line yourself, or skip it to accept it as-is. Spends on a separate Claude API key, not ElevenLabs credits — or export as-is.", tag:"cost", lit:"s-reduce", alsoEnabled:["s-export"]},
+  done:      {step:"Done", title:"This file is ready", desc:"Everything fits, or you've explicitly skipped the rest. Export when you're happy.", tag:"done", lit:"s-export"},
 };
 
 function phaseOf(s){
@@ -210,9 +233,7 @@ function phaseOf(s){
   if(!cleaned) return "uploaded";
   if(!s.generated) return "cleaned";
   const dirty = s.cues.filter(c=>c.dirty).length;
-  const openFlags = s.cues.filter(c=>(c.flagged || c.overlap_flagged) && !c.needs_human).length;
   if(dirty > 0) return "loop";
-  if(openFlags > 0) return "generated";
   return s.counts.basket > 0 ? "reduce" : "done";
 }
 
@@ -239,11 +260,27 @@ function render(){
   const p = PHASES[phase];
   document.getElementById('here-step').textContent = p.step;
   document.getElementById('here-title').textContent = p.title;
-  document.getElementById('here-desc').textContent = p.desc;
+  // A cue only ever gets basketed as a one-shot, immediate decision in
+  // AutoFix (needs more speed than its voice's cap allows) -- it never
+  // needs multiple loop rounds to "become" basketed the way a borderline
+  // cue can need several rounds of incremental speed bumps to converge
+  // (ElevenLabs' speed parameter isn't perfectly linear, see
+  // MIGRATION_PLAN.md). So the basket is already trustworthy the moment
+  // it's non-empty, well before the rest of the file finishes converging
+  // -- no reason to make Reduce/Export wait for that.
+  const basketCount = (S && S.counts && S.counts.basket) || 0;
+  const basketReady = !!(S && S.generated) && basketCount > 0;
+  let desc = p.desc;
+  if(basketReady && (phase === 'loop' || phase === 'generated')){
+    desc += ' Meanwhile, ' + basketCount + ' line(s) are already in your basket -- Reduce or Export are available now too, no need to wait for this loop to finish.';
+  }
+  document.getElementById('here-desc').textContent = desc;
   const tag = document.getElementById('here-tag'); tag.textContent = p.tag; tag.className = 'tag ' + p.tag;
 
-  ['s-upload','s-clean','s-gen','s-fix','s-reduce','s-export'].forEach(id=>{
-    const el=document.getElementById(id); const on = id===p.lit || (p.alsoEnabled||[]).includes(id);
+  ['s-upload','s-clean','s-gen','s-reduce','s-export'].forEach(id=>{
+    const el=document.getElementById(id);
+    let on = id===p.lit || (p.alsoEnabled||[]).includes(id);
+    if(basketReady && (id==='s-reduce' || id==='s-export')) on = true;
     el.classList.toggle('active', on); el.disabled = !on;
   });
 
@@ -286,21 +323,19 @@ function renderPile(phase){
       status.className='status free'; status.innerHTML =
         'Cleanup done, for free. <span class="n">'+c.est_flagged+'</span> still look long on the estimate — Generate to find out for real.';
     }
-  } else if(phase==='generated'){
-    status.className='status cost'; status.innerHTML =
-      'Real durations in. <span class="n">'+(c.flagged - c.basket)+'</span> lines genuinely run long — the phantom flags are gone.';
   } else if(phase==='loop'){
     status.className='status'; const dirty=S.cues.filter(x=>x.dirty).length; status.innerHTML =
-      'Auto-fix adjusted <span class="n">'+dirty+'</span> line(s). Generate again — only those get re-billed.';
+      '<span class="n">'+dirty+'</span> line(s) changed. Generate again — only those get re-billed, then the automatic speed pass re-checks everything.';
   } else if(phase==='reduce'){
     status.className='status cost'; const rd=S.last_reduce;
     status.innerHTML = rd
-      ? 'AI shortened <span class="n">'+rd.shortened.length+'</span>, declined <span class="n">'+rd.declined.length+'</span> — still in your basket. Run it again after editing, or export as-is.'
-      : '<span class="n">'+c.basket+'</span> in your basket. Let Claude draft a shortened version of each, or skip straight to Export.';
+      ? 'AI shortened <span class="n">'+rd.shortened.length+'</span>, declined <span class="n">'+rd.declined.length+'</span> — still flagged. Run it again after editing, skip a line to accept it as-is, or export.'
+      : '<span class="n">'+c.basket+'</span> line(s) genuinely too long even at max speed — the automatic speed pass couldn\'t close the gap. Let Claude draft a shortened version, edit them yourself, or skip a line to accept it as-is.';
   } else if(phase==='done'){
     const done = S.last_export ? 'Exported ✓ — ' : '';
-    if(c.basket) { status.className='status'; status.innerHTML =
-      done+'Pipeline did its part. <span class="n">'+c.basket+'</span> in your basket — real judgment calls, never auto-applied.'; }
+    const skipped = S.cues.filter(x=>x.skipped).length;
+    if(skipped) { status.className='status'; status.innerHTML =
+      done+'All remaining lines were explicitly skipped (<span class="n">'+skipped+'</span>) — accepted as-is.'; }
     else { status.className='status free'; status.innerHTML=done+'All lines fit. Nothing left for you.'; }
   } else { status.textContent=''; status.className='status'; }
 
@@ -313,9 +348,10 @@ function renderPile(phase){
   pile.innerHTML='';
   show.forEach(cue=>{
     const row=document.createElement('div');
-    row.className='cue'+(cue.needs_human?' basket':(preGen?' est':''));
+    row.className='cue'+(cue.skipped?' skipped':(cue.needs_human?' basket':(preGen?' est':'')));
     let over='';
-    if(cue.needs_human) over='basket';
+    if(cue.skipped) over='skipped';
+    else if(cue.needs_human) over='basket';
     else if(preGen) over='+'+cue.est_overage_ms+' ms est';
     else if(cue.overlap_flagged) over='overlap';
     else over='+'+cue.overage_ms+' ms';
@@ -324,10 +360,15 @@ function renderPile(phase){
     row.innerHTML =
       '<span class="id">#'+cue.index+'</span>'+
       '<span class="txt"><span class="'+whoClass+'">'+whoLabel+'</span>'+esc(cue.current_text)+
-        (cue.needs_human?'<div class="reason">'+esc(cue.human_reason)+'</div>':'')+
-        (cue.needs_human && cue.ai_suggestion?'<div class="reason" style="color:var(--muted)">AI tried: “'+esc(cue.ai_suggestion)+'” — '+esc(cue.ai_note)+'</div>':'')+
-        (cue.needs_human?'<button class="link" onclick="toggleEd('+cue.index+')">edit this line ▸</button>':'')+
-        (cue.needs_human && cue.ai_suggestion?' <button class="link" onclick="useSuggestion('+cue.index+')">start from AI draft ▸</button>':'')+
+        (cue.needs_human && !cue.skipped?'<div class="reason">'+esc(cue.human_reason)+'</div>':'')+
+        (cue.needs_human && cue.ai_suggestion && !cue.skipped?'<div class="reason" style="color:var(--muted)">AI tried: “'+esc(cue.ai_suggestion)+'” — '+esc(cue.ai_note)+'</div>':'')+
+        (cue.skipped?'<div class="reason" style="color:var(--faint)">Skipped — accepted as-is, excluded from Reduce and the flagged count.</div>':'')+
+        (cue.needs_human?
+          '<div class="actions">'+
+            (!cue.skipped?'<button class="mini go" onclick="toggleEd('+cue.index+')">✎ edit this line</button>':'')+
+            (cue.ai_suggestion && !cue.skipped?'<button class="link" onclick="useSuggestion('+cue.index+')">start from AI draft ▸</button>':'')+
+            '<button class="link" onclick="toggleSkip('+cue.index+','+(!cue.skipped)+')">'+(cue.skipped?'un-skip, bring back ▸':'skip, accept as-is ▸')+'</button>'+
+          '</div>' : '')+
         '<div class="editor" id="ed-'+cue.index+'"><textarea id="ta-'+cue.index+'">'+esc(cue.current_text)+'</textarea>'+
           '<div class="row"><button class="mini go" onclick="saveCue('+cue.index+')">Save &amp; mark for regenerate</button>'+
           '<button class="mini" onclick="toggleEd('+cue.index+')">cancel</button></div></div>'+
@@ -339,34 +380,64 @@ function renderPile(phase){
 
 function esc(s){ return (s||'').replace(/[&<>"]/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch])); }
 
+// ---- busy indicator ----
+// Every network action is wrapped in setBusy/clearBusy so it's always
+// visible that something is running -- essential once /generate starts
+// doing multi-round speed convergence internally and a single click can
+// take a while with no other feedback. setBusy also locks every other
+// rail step so overlapping requests can't race each other.
+const BUSY_LABEL = {'/cleanup':'Cleaning…', '/generate':'Generating…', '/reduce':'Reducing…', '/export':'Exporting…'};
+const STEP_BY_URL = {'/cleanup':'s-clean', '/generate':'s-gen', '/reduce':'s-reduce', '/export':'s-export'};
+function setBusy(stepId, label){
+  document.body.classList.add('busy-global');
+  if(!stepId) return;
+  const el = document.getElementById(stepId); if(!el) return;
+  el.classList.add('busy');
+  const costEl = el.querySelector('.cost');
+  if(costEl && label){ el.dataset.origCost = costEl.textContent; costEl.textContent = label; }
+}
+function clearBusy(){
+  document.body.classList.remove('busy-global');
+  document.querySelectorAll('.step.busy').forEach(el=>{
+    el.classList.remove('busy');
+    const costEl = el.querySelector('.cost');
+    if(costEl && el.dataset.origCost !== undefined){ costEl.textContent = el.dataset.origCost; delete el.dataset.origCost; }
+  });
+  render();
+}
+
 // ---- actions ----
 function pickFile(){ document.getElementById('file').click(); }
 async function doUpload(input){
   const f = input.files[0]; if(!f) return;
-  const fd = new FormData(); fd.append('file', f);
-  const r = await fetch('/upload',{method:'POST',body:fd});
-  if(!r.ok){ toast('Upload failed: '+(await r.text())); return; }
-  S = await r.json(); render(); toast('Loaded ' + f.name);
-  input.value='';
+  setBusy('s-upload', 'Uploading…');
+  try{
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch('/upload',{method:'POST',body:fd});
+    if(!r.ok){ toast('Upload failed: '+(await r.text()), {error:true, sticky:true}); return; }
+    S = await r.json(); toast('Loaded ' + f.name);
+    input.value='';
+  } finally { clearBusy(); }
 }
 async function call(url, okMsg){
-  const r = await fetch(url,{method:'POST'});
-  if(r.status===429){ toast('⛔ ' + (await r.json()).detail); await refresh(); return; }
-  if(r.status===409){ toast('⚠ ' + (await r.json()).detail); await refresh(); return; }
-  if(!r.ok){ let msg; try{ msg=(await r.json()).detail; }catch(e){ msg=await r.text(); } toast('Failed: '+msg); return; }
-  S = await r.json(); render();
-  let extra='';
-  if(url==='/generate' && S.last_run){ const g=S.last_run;
-    extra = g.generated.length ? ' · billed '+g.generated.length+', cached '+g.skipped_cached : ' · nothing changed, 0 credits';
-    if(g.overlap_conflict) extra += ' · overlaps still block export'; }
-  if(url==='/autofix' && S.last_autofix){ const a=S.last_autofix;
-    extra = ' · sped '+a.sped.length+', basket '+a.basketed.length;
-    if(a.retimed && a.retimed.length) extra += ', retimed '+a.retimed.length; }
-  if(url==='/reduce' && S.last_reduce){ const rd=S.last_reduce;
-    extra = ' · shortened '+rd.shortened.length+', declined '+rd.declined.length; }
-  if(url==='/export' && S.last_export){
-    extra = S.last_export.wav_path ? ' · WAV ready to download' : ' · manifest written to work/export_manifest.json'; }
-  toast(okMsg + extra);
+  setBusy(STEP_BY_URL[url], BUSY_LABEL[url]);
+  try{
+    const r = await fetch(url,{method:'POST'});
+    if(r.status===429){ toast('⛔ ' + (await r.json()).detail, {error:true, sticky:true}); await refresh(); return; }
+    if(r.status===409){ toast('⚠ ' + (await r.json()).detail, {error:true, sticky:true}); await refresh(); return; }
+    if(!r.ok){ let msg; try{ msg=(await r.json()).detail; }catch(e){ msg=await r.text(); } toast('Failed: '+msg, {error:true, sticky:true}); return; }
+    S = await r.json();
+    let extra='';
+    if(url==='/generate' && S.last_run){ const g=S.last_run;
+      extra = g.generated.length ? ' · billed '+g.generated.length+', cached '+g.skipped_cached : ' · nothing changed, 0 credits';
+      extra += ' · auto-sped '+g.auto_sped+', '+g.still_basketed+' still flagged';
+      if(g.overlap_conflict) extra += ' · overlaps still block export'; }
+    if(url==='/reduce' && S.last_reduce){ const rd=S.last_reduce;
+      extra = ' · shortened '+rd.shortened.length+', declined '+rd.declined.length; }
+    if(url==='/export' && S.last_export){
+      extra = S.last_export.wav_path ? ' · WAV ready to download' : ' · manifest written to work/export_manifest.json'; }
+    toast(okMsg + extra);
+  } finally { clearBusy(); }
 }
 function toggleEd(i){ document.getElementById('ed-'+i).classList.toggle('show'); }
 function useSuggestion(i){
@@ -374,18 +445,43 @@ function useSuggestion(i){
   document.getElementById('ed-'+i).classList.add('show');
   document.getElementById('ta-'+i).value = cue.ai_suggestion;
 }
+async function toggleSkip(i, skip){
+  const r = await fetch('/cue/'+i,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({skip})});
+  if(!r.ok){ toast('Could not update #'+i, {error:true, sticky:true}); return; }
+  await refresh();
+  toast(skip ? 'Skipped #'+i+' — accepted as-is' : 'Un-skipped #'+i+' — back in your basket');
+}
 async function saveCue(i){
   const text = document.getElementById('ta-'+i).value;
-  const r = await fetch('/cue/'+i,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
-  if(!r.ok){ toast('Save failed'); return; }
+  const btn = document.querySelector('#ed-'+i+' .mini.go');
+  if(btn){ btn.disabled = true; btn.dataset.origText = btn.textContent; btn.textContent = 'Saving…'; }
+  let r;
+  try{
+    r = await fetch('/cue/'+i,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = btn.dataset.origText; delete btn.dataset.origText; }
+  }
+  if(!r.ok){ toast('Save failed', {error:true, sticky:true}); return; }
   await refresh(); toast('Saved #'+i+' — Generate again to re-check it');
 }
 async function doReset(){
   await fetch('/reset',{method:'POST'}); await refresh(); toast('Session cleared');
 }
 let toastT;
-function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
-  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),3200); }
+function toast(msg, opts){
+  opts = opts || {};
+  const t=document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  t.classList.toggle('error', !!opts.error);
+  t.classList.toggle('sticky', !!opts.sticky);
+  t.classList.add('show');
+  clearTimeout(toastT);
+  if(!opts.sticky){ toastT=setTimeout(dismissToast,3200); }
+}
+function dismissToast(){
+  clearTimeout(toastT);
+  document.getElementById('toast').classList.remove('show','error','sticky');
+}
 
 refresh();
 </script>
