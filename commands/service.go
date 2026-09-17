@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/haguro/elevenlabs-go"
@@ -111,28 +112,67 @@ func (ls *LocalService) elevenLabsClient() *elevenlabs.Client {
 	return elevenlabs.NewClient(context.Background(), ls.cfg.Engine.AuthKey, 30*time.Second)
 }
 
-// Generate is THE function that spends a run: it enforces the run cap,
-// then relies entirely on the engine's own content-hashed on-disk cache to
-// make an unchanged cue free even though the whole cue list is always sent
-// (full context is required for correct merging/stitching). Ported from
-// dub-studio's core.generate_cues, adapted from subprocess+report-text
-// scraping to direct in-process calls and struct access.
-func (ls *LocalService) Generate(s *Session) (GenerateResult, error) {
-	if ls.cfg.RunCap > 0 && s.RunCount >= ls.cfg.RunCap {
-		return GenerateResult{}, fmt.Errorf(
-			"run cap reached (%d generations for this video); no audio was generated, reset the session to continue", ls.cfg.RunCap)
-	}
+// maxConvergenceRounds caps how many internal speed-bump-then-remeasure
+// cycles a single Generate call runs before giving up and reporting
+// whatever state it reached. AutoFixDurations' own speed-cap logic already
+// guarantees any one cue converges or gets basketed in a bounded number of
+// rounds in the common case (ElevenLabs' speed parameter is close enough to
+// linear that 1-2 corrective rounds are normal); this is a safety net
+// against a pathological oscillation, not an expected ceiling. See
+// MIGRATION_PLAN.md for the 2026-09-18 redesign this implements.
+const maxConvergenceRounds = 5
 
+// generateRoundResult captures what one internal ElevenLabs round of
+// Generate's automatic speed-convergence loop measured, before AutoFix
+// decides whether another round is needed.
+type generateRoundResult struct {
+	billedPositions []int // 1-based positions in this round's post-merge item list that were freshly synthesized (cache miss)
+	itemCount       int
+	overlapConflict bool
+	overlappingCues []int
+}
+
+// aggregateGenerateRounds combines every round's billing into one final
+// report: the full set of distinct positions billed across all rounds (a
+// cue that needed two speed-corrective rounds to converge is one billed
+// cue, not two -- see Generate's doc comment below), and the final round's
+// overlap state, since an earlier round's overlap may have resolved once
+// speeds changed. Pure and separable from the network calls so it's
+// testable without a fake ElevenLabs client.
+func aggregateGenerateRounds(rounds []generateRoundResult) GenerateResult {
+	billed := map[int]bool{}
+	var last generateRoundResult
+	for _, r := range rounds {
+		for _, pos := range r.billedPositions {
+			billed[pos] = true
+		}
+		last = r
+	}
+	generated := make([]int, 0, len(billed))
+	for pos := range billed {
+		generated = append(generated, pos)
+	}
+	sort.Ints(generated)
+	return GenerateResult{
+		Generated:       generated,
+		SkippedCached:   last.itemCount - len(generated),
+		OverlapConflict: last.overlapConflict,
+		OverlappingCues: last.overlappingCues,
+	}
+}
+
+// generateOnce is one ElevenLabs round: parse+merge the current cues,
+// synthesize whatever isn't already cached, measure real durations, and
+// detect overlaps. Ported from dub-studio's core.generate_cues, adapted
+// from subprocess+report-text scraping to direct in-process calls and
+// struct access. Not independently unit-tested (it needs a real
+// ElevenLabs client) -- verified live, same as the rest of this file's
+// network-touching code; aggregateGenerateRounds above carries the
+// orchestration logic that *is* unit-tested.
+func (ls *LocalService) generateOnce(s *Session) (generateRoundResult, error) {
 	items, err := ls.writeAndParse(s.Cues)
 	if err != nil {
-		return GenerateResult{}, err
-	}
-
-	skippedCached := 0
-	for _, item := range items {
-		if item.Path.Path != "" {
-			skippedCached++
-		}
+		return generateRoundResult{}, err
 	}
 
 	audioFiles := generateMissingVoiceLines(ls.elevenLabsClient(), items)
@@ -142,15 +182,10 @@ func (ls *LocalService) Generate(s *Session) (GenerateResult, error) {
 
 	s.Cues = rebuildCuesAfterGenerate(s.Cues, audioFiles, overlapsByFirst)
 
-	generatedCount := len(items) - skippedCached
-	if generatedCount > 0 {
-		s.RunCount++
-	}
-
-	generated := make([]int, 0, generatedCount)
+	billedPositions := make([]int, 0)
 	for i, item := range items {
 		if item.Path.Path == "" {
-			generated = append(generated, i+1)
+			billedPositions = append(billedPositions, i+1)
 		}
 	}
 
@@ -161,13 +196,81 @@ func (ls *LocalService) Generate(s *Session) (GenerateResult, error) {
 		}
 	}
 
-	return GenerateResult{
-		RunNumber:       s.RunCount,
-		Generated:       generated,
-		SkippedCached:   skippedCached,
-		OverlapConflict: len(overlaps) > 0,
-		OverlappingCues: overlapping,
+	return generateRoundResult{
+		billedPositions: billedPositions,
+		itemCount:       len(items),
+		overlapConflict: len(overlaps) > 0,
+		overlappingCues: overlapping,
 	}, nil
+}
+
+// runConvergenceLoop drives the round-counting/stopping logic for
+// Generate's automatic speed-convergence loop: call generate, then
+// autoFix; stop once autoFix makes no further speed changes (converged --
+// everything either fits or is basketed) or maxConvergenceRounds is hit.
+// Takes its two steps as closures so this control flow is unit-testable
+// without a real ElevenLabs client or Anthropic key -- generateOnce and
+// AutoFix themselves are not (see generateOnce's own doc comment).
+func runConvergenceLoop(generate func() (generateRoundResult, error), autoFix func() AutoFixResult) ([]generateRoundResult, []AutoFixResult, error) {
+	var rounds []generateRoundResult
+	var afResults []AutoFixResult
+	for round := 0; round < maxConvergenceRounds; round++ {
+		roundResult, err := generate()
+		if err != nil {
+			return rounds, afResults, err
+		}
+		rounds = append(rounds, roundResult)
+
+		afResult := autoFix()
+		afResults = append(afResults, afResult)
+		if len(afResult.Sped) == 0 {
+			break
+		}
+	}
+	return rounds, afResults, nil
+}
+
+// Generate is THE function that spends a run. Per Matko's 2026-09-18
+// redesign, one Generate call no longer stops after a single round: it
+// automatically loops generateOnce -> AutoFix -> (if AutoFix bumped any
+// cue's speed) generateOnce again, silently, until AutoFix makes no
+// further speed changes (converged: everything either fits or is
+// basketed) or maxConvergenceRounds is hit. By the time Generate returns,
+// the only cues still flagged are ones that genuinely can't be fixed by
+// speed alone -- real candidates for Reduce or a human edit, not "just
+// needs one more click." This still only enforces the run cap and
+// increments RunCount ONCE per Generate call, regardless of how many
+// internal rounds ran -- from the user's perspective they asked for one
+// generation, not several.
+func (ls *LocalService) Generate(s *Session) (GenerateResult, error) {
+	if ls.cfg.RunCap > 0 && s.RunCount >= ls.cfg.RunCap {
+		return GenerateResult{}, fmt.Errorf(
+			"run cap reached (%d generations for this video); no audio was generated, reset the session to continue", ls.cfg.RunCap)
+	}
+
+	rounds, afResults, err := runConvergenceLoop(
+		func() (generateRoundResult, error) { return ls.generateOnce(s) },
+		func() AutoFixResult { return ls.AutoFix(s) },
+	)
+	if err != nil {
+		return GenerateResult{}, err
+	}
+
+	result := aggregateGenerateRounds(rounds)
+	if len(result.Generated) > 0 {
+		s.RunCount++
+	}
+	result.RunNumber = s.RunCount
+
+	spedCues := map[int]bool{}
+	for _, af := range afResults {
+		for _, sp := range af.Sped {
+			spedCues[sp.Index] = true
+		}
+	}
+	result.AutoSped = len(spedCues)
+	result.StillBasketed = len(s.Basket())
+	return result, nil
 }
 
 func (ls *LocalService) AutoFix(s *Session) AutoFixResult {

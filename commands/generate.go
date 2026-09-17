@@ -12,6 +12,12 @@ type GenerateResult struct {
 	SkippedCached   int   `json:"skipped_cached"`
 	OverlapConflict bool  `json:"overlap_conflict"`
 	OverlappingCues []int `json:"overlapping_cues"`
+	// AutoSped and StillBasketed summarize the automatic speed-convergence
+	// loop (see LocalService.Generate) that now runs inside every Generate
+	// call: how many distinct cues got a speed bump at some point during
+	// convergence, and how many are left basketed once it settled.
+	AutoSped      int `json:"auto_sped"`
+	StillBasketed int `json:"still_basketed"`
 }
 
 // rebuildCuesAfterGenerate replaces oldCues with one SessionCue per

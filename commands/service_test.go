@@ -1,6 +1,9 @@
 package commands
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func testServiceConfig() ServiceConfig {
 	return ServiceConfig{
@@ -102,6 +105,121 @@ func TestLocalService_UpdateCue(t *testing.T) {
 	t.Run("unknown index errors", func(t *testing.T) {
 		if _, err := ls.UpdateCue(s, 99, nil, nil, nil); err == nil {
 			t.Error("want an error for an unknown cue index")
+		}
+	})
+}
+
+func TestAggregateGenerateRounds(t *testing.T) {
+	t.Run("a cue billed in two rounds (needed a second speed correction) counts once, not twice", func(t *testing.T) {
+		rounds := []generateRoundResult{
+			{billedPositions: []int{1, 3}, itemCount: 5, overlapConflict: true, overlappingCues: []int{3}},
+			{billedPositions: []int{3, 5}, itemCount: 5, overlapConflict: false, overlappingCues: []int{}},
+		}
+		got := aggregateGenerateRounds(rounds)
+		if len(got.Generated) != 3 || got.Generated[0] != 1 || got.Generated[1] != 3 || got.Generated[2] != 5 {
+			t.Fatalf("Generated = %v, want [1 3 5] deduped and sorted", got.Generated)
+		}
+		if got.SkippedCached != 2 {
+			t.Errorf("SkippedCached = %d, want 2 (5 items - 3 distinct billed)", got.SkippedCached)
+		}
+	})
+
+	t.Run("overlap state reflects the final round, not an earlier one that has since resolved", func(t *testing.T) {
+		rounds := []generateRoundResult{
+			{billedPositions: []int{1}, itemCount: 2, overlapConflict: true, overlappingCues: []int{1}},
+			{billedPositions: []int{1}, itemCount: 2, overlapConflict: false, overlappingCues: []int{}},
+		}
+		got := aggregateGenerateRounds(rounds)
+		if got.OverlapConflict || len(got.OverlappingCues) != 0 {
+			t.Errorf("got = %+v, want the resolved (final round) overlap state", got)
+		}
+	})
+
+	t.Run("a single round behaves exactly like the old one-shot Generate", func(t *testing.T) {
+		rounds := []generateRoundResult{
+			{billedPositions: []int{2}, itemCount: 4, overlapConflict: false, overlappingCues: []int{}},
+		}
+		got := aggregateGenerateRounds(rounds)
+		if len(got.Generated) != 1 || got.Generated[0] != 2 || got.SkippedCached != 3 {
+			t.Errorf("got = %+v", got)
+		}
+	})
+}
+
+func TestRunConvergenceLoop(t *testing.T) {
+	t.Run("stops as soon as AutoFix makes no further speed changes", func(t *testing.T) {
+		generateCalls := 0
+		generate := func() (generateRoundResult, error) {
+			generateCalls++
+			return generateRoundResult{itemCount: 1}, nil
+		}
+		afCalls := 0
+		autoFix := func() AutoFixResult {
+			afCalls++
+			if afCalls < 3 {
+				return AutoFixResult{Sped: []SpeedChange{{Index: 1}}}
+			}
+			return AutoFixResult{} // converged on the 3rd AutoFix call
+		}
+
+		rounds, afResults, err := runConvergenceLoop(generate, autoFix)
+		if err != nil {
+			t.Fatalf("runConvergenceLoop() error: %v", err)
+		}
+		if generateCalls != 3 || afCalls != 3 {
+			t.Fatalf("generate calls = %d, autoFix calls = %d, want 3 and 3 (stop right after convergence, not one extra generate)", generateCalls, afCalls)
+		}
+		if len(rounds) != 3 || len(afResults) != 3 {
+			t.Errorf("rounds = %d, afResults = %d, want 3 each", len(rounds), len(afResults))
+		}
+	})
+
+	t.Run("a single round that already converges makes exactly one generate call", func(t *testing.T) {
+		generateCalls := 0
+		generate := func() (generateRoundResult, error) { generateCalls++; return generateRoundResult{}, nil }
+		autoFix := func() AutoFixResult { return AutoFixResult{} }
+
+		rounds, _, err := runConvergenceLoop(generate, autoFix)
+		if err != nil {
+			t.Fatalf("runConvergenceLoop() error: %v", err)
+		}
+		if generateCalls != 1 || len(rounds) != 1 {
+			t.Fatalf("generate calls = %d, rounds = %d, want 1 each", generateCalls, len(rounds))
+		}
+	})
+
+	t.Run("a pathological non-converging AutoFix is stopped by the round cap, not left to loop forever", func(t *testing.T) {
+		calls := 0
+		generate := func() (generateRoundResult, error) { calls++; return generateRoundResult{}, nil }
+		autoFix := func() AutoFixResult { return AutoFixResult{Sped: []SpeedChange{{Index: 1}}} } // never converges
+
+		rounds, afResults, err := runConvergenceLoop(generate, autoFix)
+		if err != nil {
+			t.Fatalf("runConvergenceLoop() error: %v", err)
+		}
+		if calls != maxConvergenceRounds || len(rounds) != maxConvergenceRounds || len(afResults) != maxConvergenceRounds {
+			t.Fatalf("calls = %d, want exactly maxConvergenceRounds (%d)", calls, maxConvergenceRounds)
+		}
+	})
+
+	t.Run("a generate error on a later round stops the loop and surfaces the error, keeping earlier rounds", func(t *testing.T) {
+		errBoom := fmt.Errorf("network exploded")
+		calls := 0
+		generate := func() (generateRoundResult, error) {
+			calls++
+			if calls == 2 {
+				return generateRoundResult{}, errBoom
+			}
+			return generateRoundResult{}, nil
+		}
+		autoFix := func() AutoFixResult { return AutoFixResult{Sped: []SpeedChange{{Index: 1}}} }
+
+		rounds, _, err := runConvergenceLoop(generate, autoFix)
+		if err != errBoom {
+			t.Fatalf("err = %v, want errBoom", err)
+		}
+		if len(rounds) != 1 {
+			t.Fatalf("rounds = %d, want 1 (the successful round before the error)", len(rounds))
 		}
 	})
 }
