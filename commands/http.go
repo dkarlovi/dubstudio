@@ -330,7 +330,7 @@ func (h *httpServer) handleUpdateCue(w http.ResponseWriter, r *http.Request) {
 	if !h.save(w) {
 		return
 	}
-	writeJSON(w, http.StatusOK, cueDTO(cue, h.toleranceMs))
+	writeJSON(w, http.StatusOK, cueDTO(cue))
 }
 
 func (h *httpServer) handleReset(w http.ResponseWriter, r *http.Request) {
@@ -358,9 +358,23 @@ func indices(cues []*SessionCue) []int {
 // flagged/est_flagged/dirty fields dub-studio's own core.Cue exposes as
 // properties. est_flagged/est_overage_ms are always zero-valued -- this Go
 // service has no mock/estimate mode.
-func cueDTO(c *SessionCue, toleranceMs int) map[string]any {
+//
+// flagged means NeedsHuman, not "runs past its own subtitle window" --
+// found live 2026-09-18: AutoFix's real budget (time until the same voice
+// speaks again, see realBudgetsMs in autofix.go) is deliberately more
+// generous than the subtitle's own window, which exists for reading text
+// on screen, not for constraining an audio-only voice track. On a real
+// 132-cue session, 46 cues ran past their own window but well within real
+// budget and were correctly left alone by AutoFix -- displaying those as
+// "flagged" (the old behavior, using OverageMs()/toleranceMs) buried the
+// 4 cues that actually needed attention in noise. NeedsHuman is already
+// computed against the correct (real budget) metric, so it's the right
+// signal here; Session.Flagged (used for the export manifest) keeps the
+// separate raw-window meaning, which is a legitimate video-sync concern
+// distinct from "does this need Reduce/a human."
+func cueDTO(c *SessionCue) map[string]any {
 	overageMs := c.OverageMs()
-	flagged := c.AudioMs != nil && overageMs > toleranceMs && !c.Skipped
+	flagged := c.AudioMs != nil && c.NeedsHuman && !c.Skipped
 	return map[string]any{
 		"index":           c.Index,
 		"start_ms":        c.StartMs,
@@ -395,7 +409,7 @@ func sessionDTO(s *Session, toleranceMs, runCap int) map[string]any {
 	cues := make([]map[string]any, 0, len(s.Cues))
 	flaggedCount, basketCount := 0, 0
 	for _, c := range s.Cues {
-		d := cueDTO(c, toleranceMs)
+		d := cueDTO(c)
 		cues = append(cues, d)
 		if d["flagged"].(bool) {
 			flaggedCount++

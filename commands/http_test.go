@@ -49,38 +49,52 @@ func TestHandleIndex(t *testing.T) {
 func TestCueDTO(t *testing.T) {
 	t.Run("voice is lowercased for the legacy frontend's hardcoded matko/hana check", func(t *testing.T) {
 		c := &SessionCue{Voice: "Matko", CurrentText: "hi"}
-		got := cueDTO(c, 120)
+		got := cueDTO(c)
 		if got["voice"] != "matko" {
 			t.Errorf("voice = %v, want matko", got["voice"])
 		}
 	})
 
-	t.Run("flagged uses the given tolerance, not zero", func(t *testing.T) {
-		audioMs := 2150 // window 2000ms -> overage 150ms
-		c := &SessionCue{StartMs: 0, EndMs: 2000, AudioMs: &audioMs}
-
-		if got := cueDTO(c, 200)["flagged"]; got != false {
-			t.Errorf("flagged with tolerance 200 = %v, want false (150ms overage is under tolerance)", got)
+	t.Run("flagged reflects needs_human, not raw window overage", func(t *testing.T) {
+		// found live 2026-09-18: a cue can run well past its own subtitle
+		// window and still be entirely fine, because AutoFix's real budget
+		// (time until the same voice speaks again) is deliberately more
+		// generous than that window. Using raw overage here buried the
+		// cues that actually needed attention in noise.
+		audioMs := 5000 // window 2000ms -> overage 3000ms, but AutoFix decided this is fine
+		c := &SessionCue{StartMs: 0, EndMs: 2000, AudioMs: &audioMs, NeedsHuman: false}
+		if got := cueDTO(c)["flagged"]; got != false {
+			t.Errorf("flagged = %v, want false (large raw overage, but AutoFix didn't basket it)", got)
 		}
-		if got := cueDTO(c, 100)["flagged"]; got != true {
-			t.Errorf("flagged with tolerance 100 = %v, want true (150ms overage exceeds tolerance)", got)
+
+		c.NeedsHuman = true
+		if got := cueDTO(c)["flagged"]; got != true {
+			t.Errorf("flagged = %v, want true once AutoFix baskets it", got)
+		}
+	})
+
+	t.Run("a skipped cue is never flagged even if needs_human", func(t *testing.T) {
+		audioMs := 5000
+		c := &SessionCue{StartMs: 0, EndMs: 2000, AudioMs: &audioMs, NeedsHuman: true, Skipped: true}
+		if got := cueDTO(c)["flagged"]; got != false {
+			t.Errorf("flagged = %v, want false (skipped overrides needs_human)", got)
 		}
 	})
 
 	t.Run("a cue with no audio yet is never flagged", func(t *testing.T) {
 		c := &SessionCue{StartMs: 0, EndMs: 2000}
-		if got := cueDTO(c, 0)["flagged"]; got != false {
+		if got := cueDTO(c)["flagged"]; got != false {
 			t.Errorf("flagged = %v, want false", got)
 		}
 	})
 
 	t.Run("dirty reflects SessionCue.Dirty()", func(t *testing.T) {
 		c := &SessionCue{CurrentText: "hi", LastGeneratedText: "hi", Speed: 1.0, LastGeneratedSpeed: 1.0, HasLastGenerated: true}
-		if got := cueDTO(c, 0)["dirty"]; got != false {
+		if got := cueDTO(c)["dirty"]; got != false {
 			t.Errorf("dirty = %v, want false", got)
 		}
 		c.CurrentText = "edited"
-		if got := cueDTO(c, 0)["dirty"]; got != true {
+		if got := cueDTO(c)["dirty"]; got != true {
 			t.Errorf("dirty after edit = %v, want true", got)
 		}
 	})
@@ -98,12 +112,13 @@ func TestSessionDTO(t *testing.T) {
 	})
 
 	t.Run("counts and cap/tolerance are surfaced for the frontend's firewall meter", func(t *testing.T) {
-		overMs := 3000
+		fineOverage := 3000 // over its own window, but AutoFix left it alone -- not flagged, see cueDTO
+		basketedMs := 5000
 		s := &Session{
 			Name: "video.vtt", RunCount: 2,
 			Cues: []*SessionCue{
-				{Index: 1, StartMs: 0, EndMs: 2000, AudioMs: &overMs},
-				{Index: 2, NeedsHuman: true},
+				{Index: 1, StartMs: 0, EndMs: 2000, AudioMs: &fineOverage},
+				{Index: 2, StartMs: 0, EndMs: 2000, AudioMs: &basketedMs, NeedsHuman: true},
 			},
 		}
 		got := sessionDTO(s, 120, 10)
