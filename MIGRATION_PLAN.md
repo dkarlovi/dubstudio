@@ -26,10 +26,13 @@ you shouldn't need sections 1-13 for anything except historical rationale.
 **Branch:** `feat/dubstudio-migration`, 10 commits ahead of `upstream/main`
 (`dacd1a4`, i.e. `dkarlovi/dubstudio` post-PR-#50-post-rename — see
 CLAUDE.local.md's "Branch policy" for how that upstream history got
-there). Latest commit `b069adf`. **Not pushed anywhere, no PR opened.**
+there). Latest commit `b069adf`, **plus uncommitted working-tree changes**
+for the `/reduce` port (item 5 below) — not committed because commits are
+made only when Matko explicitly asks, per session instructions; ask him
+before assuming it's fine to commit. **Not pushed anywhere, no PR opened.**
 Nothing on `origin` corresponds to it.
 
-**What's done, each with Go tests and (except item 4) a PoC-side parity
+**What's done, each with Go tests and (except items 4-5) a PoC-side parity
 bridge test — see section 14 below for exact file names per feature:**
 
 1. Parity bridge infrastructure: `parity` and `autofix-parity` CLI
@@ -48,24 +51,61 @@ bridge test — see section 14 below for exact file names per feature:**
    `session-cleanup`, `session-generate`, `session-autofix`,
    `session-export`, `session-update-cue`, `session-show`, `session-reset`.
 4. An HTTP API (`serve` command): a route-for-route equivalent of
-   dub-studio's `app.py` (minus `/reduce`), **live-verified end-to-end
-   with a real browser (Playwright) driving dub-studio's actual,
-   unmodified `static/index.html`** against it — a real ElevenLabs
-   generate/autofix/export round trip producing a valid, downloadable WAV.
+   dub-studio's `app.py` (at the time, minus `/reduce`), **live-verified
+   end-to-end with a real browser (Playwright) driving dub-studio's
+   actual, unmodified `static/index.html`** against it — a real
+   ElevenLabs generate/autofix/export round trip producing a valid,
+   downloadable WAV.
+5. **`/reduce` (AI-assisted line shortening), added 2026-09-17 — a native
+   Go port, not a parity port** (reverses the earlier "deliberately out of
+   scope" call below, once Matko decided to retire `app.py` entirely — see
+   "Not yet done" item 1). Calls the Anthropic Messages API directly over
+   `net/http` (forced tool use, no new dependency), live-verified against
+   the real API. New CLI command `session-reduce`; new flags
+   `--anthropic-api-key`/`--reduce-model` on `serve`/`session-reduce`. A
+   real bug was found and fixed during live verification — see section 14
+   entry 5 for what it was and why it likely also exists, unnoticed, in
+   the PoC's own Python implementation.
+6. **Frontend embedded into the Go binary, added 2026-09-17.**
+   `~/dub-studio/static/index.html` (a single self-contained file — inline
+   CSS/JS, only a Google Fonts CDN link as an external reference, no local
+   JS/CSS/image assets to bring along) is now vendored into this repo at
+   `commands/webassets/index.html` and baked into the binary via
+   `//go:embed` (`commands/webassets.go`). `serve` now works with **zero**
+   flags pointing at the Python repo -- live-verified: `serve --config
+   ~/dubbing/config.yaml --work-dir <anywhere>`, no `--static-dir` at all,
+   serves the full working UI. `--static-dir` still exists but now only as
+   an explicit override for iterating on the frontend locally without a
+   rebuild; the embedded copy is the default and, going forward, the
+   canonical one -- edit `commands/webassets/index.html`, not
+   `~/dub-studio/static/index.html`. Confirms Matko's 2026-09-17
+   requirement: dubstudio must end up completely standalone and
+   self-contained, with every frontend asset living in the Go repo, so the
+   Python PoC can eventually be deleted in full.
 
-**Deliberately out of scope, don't re-litigate without a reason:**
-`reduce_text` (Claude-drafted line shortening) — it's an LLM call, not
-deterministic business logic, so it doesn't fit this plan's
-byte-identical parity model. No `/reduce` route exists on the new API.
+**Superseded — kept for context, not current:** the paragraph below
+described `reduce_text` as deliberately out of scope. That call held until
+2026-09-17, when Matko decided `app.py` should be retired entirely rather
+than kept alive just to serve `/reduce`; item 5 above is the reversal.
+> `reduce_text` (Claude-drafted line shortening) — it's an LLM call, not
+> deterministic business logic, so it doesn't fit this plan's
+> byte-identical parity model. No `/reduce` route exists on the new API.
 
 **Not yet done — the real next steps:**
 1. dub-studio (`~/dub-studio/app.py`) has **not** been switched to call
-   this new Go HTTP API. It still runs its own orchestration and shells
-   out to a separately-built binary the old way. The new `serve` command
-   works standalone (proven live) but nothing in `~/dub-studio` points at
-   it yet. This is the actual next decision: point `app.py` at it,
-   replace `app.py` with it entirely (since it already serves
-   `dub-studio`'s own `static/index.html` just fine), or something else.
+   this new Go HTTP API, and hasn't been retired yet either. It still runs
+   its own orchestration and shells out to a separately-built binary the
+   old way. The new `serve` command now covers every route `app.py` has,
+   including `/reduce` as of 2026-09-17 (item 5 above), and now embeds the
+   frontend itself (item 6 above) — nothing routing- or asset-wise blocks
+   retiring `app.py`/`core.py`/`config.py` anymore. Matko has decided to
+   replace `app.py` entirely (not keep it as a thin proxy, not split
+   traffic between the two), confirmed 2026-09-17: the end state is
+   dubstudio (Go) fully standalone and self-contained, with every frontend
+   asset living in this repo, and the Python PoC deleted in full,
+   eventually. That replacement/deletion itself hasn't happened yet --
+   `~/dub-studio` still exists and its `bin/srt11` is still what gets
+   rebuilt after every change (see CLAUDE.local.md).
 2. No PR opened, nothing pushed to `origin` or `upstream`. Decide scope
    (one PR vs. split) before opening one — see CLAUDE.local.md's PR
    procedure section for dkarlovi's review norms, though note that section
@@ -86,13 +126,16 @@ go build ./... && go vet ./... && go test ./... && gofmt -l .
 go build -o ~/dub-studio/bin/srt11 .   # mandatory after any change — see CLAUDE.local.md
 ```
 
-**Try the HTTP server against the real frontend:**
+**Try the HTTP server (frontend is embedded, no `--static-dir` needed):**
 ```sh
 ~/dub-studio/bin/srt11 --config ~/dubbing/config.yaml serve \
-  --work-dir /some/scratch/dir --static-dir ~/dub-studio/static --addr :8099
+  --work-dir /some/scratch/dir --addr :8099
 ```
+Add `--static-dir ~/srt11/commands/webassets` (or any directory with your
+own working copy of `index.html`) only if you're iterating on the
+frontend itself and don't want to rebuild the Go binary for every edit.
 Then open `http://localhost:8099/` in a browser (it's dub-studio's real
-UI, unmodified), or drive it headlessly with Playwright. No Playwright
+UI), or drive it headlessly with Playwright. No Playwright
 MCP tool was available in this session; `npm --cache <scratch-dir>
 install --no-save playwright` plus `npx playwright install chromium`
 into a scratch prefix worked around a broken global npm cache — don't
@@ -108,6 +151,13 @@ fight that same npm cache again, just scope around it the same way.
   dub-studio's `index.html` uses for its `S` session variable, is not a
   `window` property — access it as the bare identifier `S` from
   `page.evaluate`/`page.waitForFunction`, not `window.S`.
+- Forcing a Claude tool call for structured output needs per-field
+  `description`s in the `input_schema` whenever a field's meaning depends
+  on another field's value (e.g. `text` means something different when
+  `action` is `"shorten"` vs `"decline"`) — bare field names alone aren't
+  enough signal, confirmed live: the model put the original text in `text`
+  and the actual rewrite inside `reason`'s prose until descriptions were
+  added. See section 14 entry 5.
 
 ---
 
@@ -531,10 +581,11 @@ CLI commands: `session-upload`, `session-cleanup`, `session-generate`,
 **HTTP API (section 8 item 11) — done, live-verified against the real,
 unmodified frontend.** `commands/http.go` is a route-for-route equivalent
 of dub-studio's `app.py` (GET `/session`, POST `/upload`/`/cleanup`/
-`/generate`/`/autofix`/`/cue/{index}`/`/export`, GET `/export/download`,
-POST `/reset`, plus `/` and `/static/` when `--static-dir` is given),
-minus `/reduce` (still deliberately excluded, see below). New `serve` CLI
-command. Depends only on `Service`/`SessionStore`, not on `LocalService`/
+`/generate`/`/autofix`/`/reduce`/`/cue/{index}`/`/export`, GET
+`/export/download`, POST `/reset`, plus `/` and `/static/` when
+`--static-dir` is given) -- `/reduce` was ported later, see the dedicated
+entry below; at the time this milestone landed it was still excluded. New
+`serve` CLI command. Depends only on `Service`/`SessionStore`, not on `LocalService`/
 `FileSessionStore` concretely -- realizing the whole point of building
 those as interfaces in the previous milestone. Response shape is adapted
 at this transport boundary (`cueDTO`/`sessionDTO`) to exactly match what
@@ -565,17 +616,67 @@ One real bug found and fixed during this verification: dead code in
 `handleUpload` checked a header that was never set instead of using
 `save()`'s own return value.
 
-Deliberately not ported:
-- `reduce_text` (AI-assisted line shortening) -- an LLM call, not
-  deterministic business logic, so it doesn't fit this plan's
-  byte-identical parity model. Stays a Python/app-layer concern (or a
-  future Go feature designed on its own terms, not a port). `/reduce`
-  correspondingly does not exist on the new HTTP API.
+5. **AI-assisted line shortening (`/reduce`)** — done, native Go port (not
+   a byte-identical parity port -- see below), live-verified against the
+   real Anthropic API.
+   - PoC source: `core.reduce_text`/`_REDUCE_PROMPT`/`_LineShortenResult`
+     (`~/dub-studio/core.py`). No PoC-side test exercises this against the
+     real API either (it's inherently non-deterministic), so there is no
+     parity bridge and none is planned -- this reverses the earlier
+     "deliberately not ported" call once Matko decided to retire `app.py`
+     entirely rather than keep a Python process alive just for this route.
+   - Go test: `TestReduceTargetWords`/`TestReduceText`/
+     `TestAnthropicHTTPClient_ShortenLine` (`commands/reduce_test.go`),
+     `TestLocalService_Reduce` (`commands/service_test.go`). The
+     AnthropicClient interface seam means every test but one scripts
+     Claude's response through a fake -- no network, no spend. The
+     remaining test (`.../live:_the_real_API_accepts_this_request_shape`)
+     is a real call, skipped automatically when `ANTHROPIC_API_KEY` isn't
+     set in the environment; run explicitly to verify the request shape
+     against the live API when touching this file.
+   - Go implementation: `ReduceText`/`reduceTargetWords`/`buildReducePrompt`
+     (`commands/reduce.go`) reproduce the PoC's target-word-budget math and
+     prompt text verbatim, reusing the existing `realBudgetsMs`/
+     `toAutoFixCues` from the auto-fix port rather than recomputing budgets
+     a second way. `anthropicHTTPClient` calls the Messages API directly
+     over `net/http` (forced `tool_choice`, the Go equivalent of the Python
+     SDK's `messages.parse(output_format=...)`) -- no new dependency, same
+     reasoning as the `--normalize-target-db` decision to avoid a fresh
+     external package for one call shape.
+   - **Real bug found during live verification, fixed before landing:**
+     the initial tool schema had no per-field `description`s (mirroring
+     the PoC's own undecorated Pydantic model). Against the real API, on
+     `action: "shorten"` the model put the *original* unshortened text in
+     `text` and buried the actual rewritten line inside `reason`'s prose
+     instead -- the bare field names `text`/`reason` don't convey "this
+     field's meaning depends on `action`" on their own. Fixed by adding
+     explicit descriptions to `text` and `reason` disambiguating their
+     meaning per branch; re-verified live and `text` now correctly holds
+     the shortened line. This same ambiguity likely exists unnoticed in
+     the PoC's Python implementation too (same field names, same lack of
+     descriptions, its own structured-output mechanism may or may not
+     paper over it) -- worth keeping in mind if `reduce_text` is ever
+     revisited there, though the PoC is slated for retirement anyway.
+   - New CLI command: `session-reduce`. New flags `--anthropic-api-key`
+     (falls back to the `ANTHROPIC_API_KEY` env var, mirroring the PoC's
+     `config.py`) and `--reduce-model` (default `claude-haiku-4-5`, same
+     as the PoC) on `serve` and `session-reduce`.
+   - `SessionCue` gained `AiSuggestion`/`AiNote` fields (previously
+     hardcoded to `""` in `cueDTO` with a comment saying this service has
+     no AI line-shortening pass -- that comment is now stale and was
+     removed); the frontend's existing "AI tried: ..." / "start from AI
+     draft" UI, already wired to these exact field names, needed no
+     changes.
+   - Known exceptions: none functionally, beyond the schema-description
+     fix above already being folded in.
 
 Not yet started:
 - Retiring the PoC's own `app.py`/`core.py` orchestration in favor of
-  this one (section 11) -- the new HTTP API is proven to work standalone,
-  but dub-studio itself hasn't been switched over to point at it yet.
+  this one (section 11) -- the new HTTP API (now including `/reduce`) is
+  proven to work standalone, but dub-studio itself hasn't been switched
+  over to point at it yet. This is the actual next step, per Matko's
+  2026-09-17 decision to replace `app.py` entirely rather than keep it
+  running as a thin proxy or split traffic between the two.
 - A known pre-existing UI quirk, faithfully reproduced rather than fixed:
   the frontend's Export button gates on a cue's `flagged` count (overage
   against its own subtitle *window*), not just real overlaps/basket
