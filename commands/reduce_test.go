@@ -126,6 +126,22 @@ func TestReduceText(t *testing.T) {
 		}
 	})
 
+	t.Run("a skipped cue is never sent to Claude even if it's still basketed", func(t *testing.T) {
+		cues := []*SessionCue{
+			{Index: 1, StartMs: 0, EndMs: 2000, Voice: "hana", CurrentText: "accepted as-is", NeedsHuman: true, Skipped: true},
+		}
+		client := &fakeAnthropicClient{results: []LineShortenResult{{Action: "shorten", Text: "should never be used"}}}
+
+		result := ReduceText(cues, client)
+
+		if client.calls != 0 {
+			t.Fatalf("calls = %d, want 0 (skipped cue must never reach Claude)", client.calls)
+		}
+		if len(result.Shortened) != 0 || len(result.Declined) != 0 {
+			t.Fatalf("result = %+v, want empty", result)
+		}
+	})
+
 	t.Run("a failed AI call is recorded as declined, not fatal to the batch", func(t *testing.T) {
 		cues := []*SessionCue{
 			{Index: 1, StartMs: 0, EndMs: 2000, Voice: "hana", CurrentText: "one", NeedsHuman: true},

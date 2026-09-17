@@ -113,7 +113,7 @@ func ReduceText(cues []*SessionCue, client AnthropicClient) ReduceResult {
 
 	result := ReduceResult{Shortened: []ReduceEdit{}, Declined: []ReduceDecline{}}
 	for _, c := range cues {
-		if !c.NeedsHuman {
+		if !c.NeedsHuman || c.Skipped {
 			continue
 		}
 

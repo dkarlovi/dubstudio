@@ -312,6 +312,7 @@ func (h *httpServer) handleUpdateCue(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Text  *string  `json:"text"`
 		Speed *float64 `json:"speed"`
+		Skip  *bool    `json:"skip"`
 	}
 	if r.Body != nil {
 		defer r.Body.Close()
@@ -321,7 +322,7 @@ func (h *httpServer) handleUpdateCue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cue, err := h.service.UpdateCue(h.session, index, payload.Text, payload.Speed)
+	cue, err := h.service.UpdateCue(h.session, index, payload.Text, payload.Speed, payload.Skip)
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("No cue #%d.", index))
 		return
@@ -359,7 +360,7 @@ func indices(cues []*SessionCue) []int {
 // service has no mock/estimate mode.
 func cueDTO(c *SessionCue, toleranceMs int) map[string]any {
 	overageMs := c.OverageMs()
-	flagged := c.AudioMs != nil && overageMs > toleranceMs
+	flagged := c.AudioMs != nil && overageMs > toleranceMs && !c.Skipped
 	return map[string]any{
 		"index":           c.Index,
 		"start_ms":        c.StartMs,
@@ -374,6 +375,7 @@ func cueDTO(c *SessionCue, toleranceMs int) map[string]any {
 		"overlap_flagged": c.OverlapFlagged,
 		"needs_human":     c.NeedsHuman,
 		"human_reason":    c.HumanReason,
+		"skipped":         c.Skipped,
 		"ai_suggestion":   c.AiSuggestion,
 		"ai_note":         c.AiNote,
 		"window_ms":       c.WindowMs(),
@@ -398,7 +400,7 @@ func sessionDTO(s *Session, toleranceMs, runCap int) map[string]any {
 		if d["flagged"].(bool) {
 			flaggedCount++
 		}
-		if c.NeedsHuman {
+		if c.NeedsHuman && !c.Skipped {
 			basketCount++
 		}
 	}

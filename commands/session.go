@@ -23,6 +23,7 @@ type SessionCue struct {
 	HumanReason        string  `json:"human_reason"`
 	AiSuggestion       string  `json:"ai_suggestion"` // Claude's declined-but-attempted draft, see ReduceText
 	AiNote             string  `json:"ai_note"`       // Claude's reason for declining, or "" once cleared
+	Skipped            bool    `json:"skipped"`       // explicit "accept this line as-is" override, see UpdateCue
 }
 
 func (c *SessionCue) WindowMs() int { return c.EndMs - c.StartMs }
@@ -67,15 +68,17 @@ func (s *Session) Generated() bool {
 // Flagged returns cues whose measured overage exceeds toleranceMs -- the
 // same tolerance the engine's own overlap detection uses (dub-studio's
 // core.py treats these as literally the same constant, TOLERANCE_MS =
-// config.OVERLAP_TOLERANCE_MS).
+// config.OVERLAP_TOLERANCE_MS). A Skipped cue is excluded regardless of its
+// real overage -- an explicit "accept this as-is" from the user overrides
+// the automatic flag, the same way it overrides the basket below.
 func (s *Session) Flagged(toleranceMs int) []*SessionCue {
 	return filterCues(s.Cues, func(c *SessionCue) bool {
-		return c.AudioMs != nil && c.OverageMs() > toleranceMs
+		return c.AudioMs != nil && c.OverageMs() > toleranceMs && !c.Skipped
 	})
 }
 
 func (s *Session) Basket() []*SessionCue {
-	return filterCues(s.Cues, func(c *SessionCue) bool { return c.NeedsHuman })
+	return filterCues(s.Cues, func(c *SessionCue) bool { return c.NeedsHuman && !c.Skipped })
 }
 
 func filterCues(cues []*SessionCue, pred func(*SessionCue) bool) []*SessionCue {

@@ -250,9 +250,14 @@ func runSessionUpdateCue(c *console.Context) error {
 		speed := c.Float64("speed")
 		speedPtr = &speed
 	}
+	var skipPtr *bool
+	if c.IsSet("skip") {
+		skip := c.Bool("skip")
+		skipPtr = &skip
+	}
 
 	ls := NewLocalService(ServiceConfig{})
-	cue, err := ls.UpdateCue(session, index, textPtr, speedPtr)
+	cue, err := ls.UpdateCue(session, index, textPtr, speedPtr, skipPtr)
 	if err != nil {
 		return console.Exit(err.Error(), 1)
 	}

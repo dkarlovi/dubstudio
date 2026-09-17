@@ -58,7 +58,7 @@ type Service interface {
 	AutoFix(s *Session) AutoFixResult
 	Reduce(s *Session) (ReduceResult, error)
 	Export(s *Session) (ExportResult, error)
-	UpdateCue(s *Session, index int, text *string, speed *float64) (*SessionCue, error)
+	UpdateCue(s *Session, index int, text *string, speed *float64, skip *bool) (*SessionCue, error)
 }
 
 // LocalService implements Service by calling the engine's own parsing,
@@ -249,7 +249,11 @@ func (ls *LocalService) Export(s *Session) (ExportResult, error) {
 // edit clears the basket flag (a human already looked at it), and a speed
 // edit is always treated as an override so it's tagged on the next
 // Generate instead of silently tracking the speaker's configured default.
-func (ls *LocalService) UpdateCue(s *Session, index int, text *string, speed *float64) (*SessionCue, error) {
+// skip is independent of both: it's an explicit "accept this line as-is"
+// override (see Session.Flagged/Basket, AutoFixDurations, ReduceText), and
+// toggling it deliberately leaves NeedsHuman/HumanReason/text/speed alone
+// so un-skipping later restores exactly what was there before.
+func (ls *LocalService) UpdateCue(s *Session, index int, text *string, speed *float64, skip *bool) (*SessionCue, error) {
 	c := cueByIndex(s.Cues, index)
 	if c == nil {
 		return nil, fmt.Errorf("no cue #%d", index)
@@ -263,6 +267,9 @@ func (ls *LocalService) UpdateCue(s *Session, index int, text *string, speed *fl
 		c.Speed = math.Max(float64(MinSpeed), math.Min(float64(MaxSpeed), *speed))
 		c.SpeedOverride = true
 	}
+	if skip != nil {
+		c.Skipped = *skip
+	}
 	return c, nil
 }
 
@@ -272,7 +279,7 @@ func toAutoFixCues(cues []*SessionCue) []*AutoFixCue {
 		out = append(out, &AutoFixCue{
 			Index: c.Index, StartMs: c.StartMs, EndMs: c.EndMs, Voice: c.Voice,
 			Speed: c.Speed, SpeedOverride: c.SpeedOverride, AudioMs: c.AudioMs,
-			OverlapFlagged: c.OverlapFlagged,
+			OverlapFlagged: c.OverlapFlagged, Skipped: c.Skipped,
 		})
 	}
 	return out

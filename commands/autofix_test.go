@@ -105,6 +105,21 @@ func TestAutoFixDurations(t *testing.T) {
 		}
 	})
 
+	t.Run("a skipped cue is left completely untouched, even one that would otherwise be basketed", func(t *testing.T) {
+		c1 := autoFixCue(1, 0, 2000, "hana", ms(2500))
+		c1.Skipped = true
+		c1.NeedsHuman = true
+		c1.HumanReason = "previously basketed, before being skipped"
+		c2 := autoFixCue(2, 2200, 4000, "hana", ms(1500))
+		result := AutoFixDurations([]*AutoFixCue{c1, c2}, defaultAutoFixConfig())
+		if len(result.Basketed) != 0 || len(result.Sped) != 0 {
+			t.Fatalf("want no fresh sped/basketed entries for the skipped cue, got %+v", result)
+		}
+		if c1.Speed != 1.0 || !c1.NeedsHuman || c1.HumanReason != "previously basketed, before being skipped" {
+			t.Errorf("skipped cue = %+v, want its prior state left exactly as it was", c1)
+		}
+	})
+
 	t.Run("engine flagged overlap is named in the basket reason", func(t *testing.T) {
 		c1 := autoFixCue(1, 0, 2000, "hana", ms(2500))
 		c1.OverlapFlagged = true

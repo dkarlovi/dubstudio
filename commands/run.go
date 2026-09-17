@@ -220,11 +220,12 @@ func All() []*console.Command {
 		},
 		{
 			Name:  "session-update-cue",
-			Usage: "Manually edit one cue's text and/or speed",
+			Usage: "Manually edit one cue's text and/or speed, or skip/un-skip it",
 			Flags: append([]console.Flag{
 				&console.IntFlag{Name: "index", Usage: "1-based cue index to edit"},
 				&console.StringFlag{Name: "text", Usage: "New spoken text for the cue"},
 				&console.Float64Flag{Name: "speed", Usage: "New speed override for the cue"},
+				&console.BoolFlag{Name: "skip", Usage: "Accept this cue as-is, excluding it from flagged/basket counts and Reduce; --skip=false un-skips it"},
 			}, sessionWorkDirFlags()...),
 			Action: runSessionUpdateCue,
 		},

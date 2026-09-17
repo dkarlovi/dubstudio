@@ -56,7 +56,7 @@ func TestLocalService_UpdateCue(t *testing.T) {
 
 	t.Run("text edit clears the basket flag", func(t *testing.T) {
 		newText := "edited"
-		got, err := ls.UpdateCue(s, 1, &newText, nil)
+		got, err := ls.UpdateCue(s, 1, &newText, nil, nil)
 		if err != nil {
 			t.Fatalf("UpdateCue() error: %v", err)
 		}
@@ -67,7 +67,7 @@ func TestLocalService_UpdateCue(t *testing.T) {
 
 	t.Run("speed edit is clamped and marked an override", func(t *testing.T) {
 		tooHigh := 5.0
-		got, err := ls.UpdateCue(s, 1, nil, &tooHigh)
+		got, err := ls.UpdateCue(s, 1, nil, &tooHigh, nil)
 		if err != nil {
 			t.Fatalf("UpdateCue() error: %v", err)
 		}
@@ -76,8 +76,31 @@ func TestLocalService_UpdateCue(t *testing.T) {
 		}
 	})
 
+	t.Run("skip toggles independently of text/speed, and preserves the basket reason for a later un-skip", func(t *testing.T) {
+		s2 := &Session{Cues: []*SessionCue{
+			{Index: 1, CurrentText: "too long", Speed: 1.0, NeedsHuman: true, HumanReason: "past the cap"},
+		}}
+		skip := true
+		got, err := ls.UpdateCue(s2, 1, nil, nil, &skip)
+		if err != nil {
+			t.Fatalf("UpdateCue() error: %v", err)
+		}
+		if !got.Skipped || !got.NeedsHuman || got.HumanReason != "past the cap" || got.CurrentText != "too long" {
+			t.Errorf("cue = %+v, want only Skipped set, everything else untouched", got)
+		}
+
+		unskip := false
+		got, err = ls.UpdateCue(s2, 1, nil, nil, &unskip)
+		if err != nil {
+			t.Fatalf("UpdateCue() error: %v", err)
+		}
+		if got.Skipped {
+			t.Errorf("cue = %+v, want Skipped cleared", got)
+		}
+	})
+
 	t.Run("unknown index errors", func(t *testing.T) {
-		if _, err := ls.UpdateCue(s, 99, nil, nil); err == nil {
+		if _, err := ls.UpdateCue(s, 99, nil, nil, nil); err == nil {
 			t.Error("want an error for an unknown cue index")
 		}
 	})

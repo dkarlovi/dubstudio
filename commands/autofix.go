@@ -37,6 +37,7 @@ type AutoFixCue struct {
 	OverlapFlagged bool
 	NeedsHuman     bool
 	HumanReason    string
+	Skipped        bool // explicit "accept this line as-is" override, never re-evaluated
 }
 
 func (c *AutoFixCue) windowMs() int { return c.EndMs - c.StartMs }
@@ -158,6 +159,9 @@ func AutoFixDurations(cues []*AutoFixCue, cfg AutoFixConfig) AutoFixResult {
 	leadingGaps := leadingGapsMs(cues)
 
 	for _, c := range cues {
+		if c.Skipped {
+			continue // an explicit user override -- leave Speed/NeedsHuman/HumanReason exactly as they were
+		}
 		c.NeedsHuman = false
 		c.HumanReason = ""
 
