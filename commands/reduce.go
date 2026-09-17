@@ -15,10 +15,8 @@ import (
 // _LineShortenResult). Unlike every other ported feature, this one has no
 // parity bridge test against the Python PoC: it's an LLM call, not
 // deterministic business logic, so byte-identical parity across
-// implementations isn't a meaningful bar (see MIGRATION_PLAN.md's "out of
-// scope" note, now revisited -- ported natively instead of dropped when
-// app.py was retired). Go-only tests, driven through the AnthropicClient
-// interface, are the whole test story here.
+// implementations isn't a meaningful bar. Go-only tests, driven through
+// the AnthropicClient interface, are the whole test story here.
 
 const defaultReduceModel = "claude-haiku-4-5"
 

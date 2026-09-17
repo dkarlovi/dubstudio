@@ -118,8 +118,7 @@ func (ls *LocalService) elevenLabsClient() *elevenlabs.Client {
 // guarantees any one cue converges or gets basketed in a bounded number of
 // rounds in the common case (ElevenLabs' speed parameter is close enough to
 // linear that 1-2 corrective rounds are normal); this is a safety net
-// against a pathological oscillation, not an expected ceiling. See
-// MIGRATION_PLAN.md for the 2026-09-18 redesign this implements.
+// against a pathological oscillation, not an expected ceiling.
 const maxConvergenceRounds = 5
 
 // generateRoundResult captures what one internal ElevenLabs round of
