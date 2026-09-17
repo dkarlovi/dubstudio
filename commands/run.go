@@ -125,6 +125,184 @@ func All() []*console.Command {
 			},
 			Action: Run,
 		},
+		{
+			Name:        "autofix-parity",
+			Usage:       "Run dub-studio's auto-fix scheduling policy against JSON cues for migration parity checks",
+			Description: "Read cues + policy config as JSON, run AutoFixDurations, and write a JSON result for parity validation against the Python PoC",
+			Flags: []console.Flag{
+				&console.StringFlag{
+					Name:  "cues",
+					Usage: "Path to a JSON array of input cues ({index,start_ms,end_ms,voice,speed,audio_ms,overlap_flagged})",
+				},
+				&console.StringFlag{
+					Name:  "autofix-config",
+					Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps})",
+				},
+				&console.StringFlag{
+					Name:         "out-dir",
+					Usage:        "Directory to write the autofix parity summary JSON into",
+					DefaultValue: ".",
+				},
+			},
+			Action: runAutoFixParity,
+		},
+		{
+			Name:        "session-upload",
+			Usage:       "Start a new dub-studio session from a subtitle file",
+			Description: "Parse a subtitle file into a session, rejecting it if any speaker tag isn't at the very start of a cue",
+			Args: []*console.Arg{
+				{Name: "file", Description: "Path to the .srt or .vtt subtitle file"},
+			},
+			Flags: append([]console.Flag{
+				&console.StringFlag{Name: "name", Usage: "Session name (defaults to the file's basename)"},
+			}, sessionWorkDirFlags()...),
+			Action: runSessionUpload,
+		},
+		{
+			Name:   "session-cleanup",
+			Usage:  "Apply deterministic filler/hedge-phrase cleanup to the active session",
+			Flags:  sessionWorkDirFlags(),
+			Action: runSessionCleanup,
+		},
+		{
+			Name:   "session-generate",
+			Usage:  "Generate audio for the active session's dirty/uncached cues",
+			Flags:  append(sessionWorkDirFlags(), sessionGenerationFlags()...),
+			Action: runSessionGenerate,
+		},
+		{
+			Name:  "session-autofix",
+			Usage: "Run the auto-fix scheduling policy (speed bump or basket) on the active session",
+			Flags: append([]console.Flag{
+				&console.StringFlag{Name: "autofix-config", Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps}); built-in defaults are used if omitted"},
+			}, sessionWorkDirFlags()...),
+			Action: runSessionAutoFix,
+		},
+		{
+			Name:   "session-reduce",
+			Usage:  "Let Claude draft a shortened version of every basketed cue",
+			Flags:  append(sessionWorkDirFlags(), reduceFlags()...),
+			Action: runSessionReduce,
+		},
+		{
+			Name:   "session-export",
+			Usage:  "Export the active session's final mixed WAV",
+			Flags:  append(sessionWorkDirFlags(), sessionGenerationFlags()...),
+			Action: runSessionExport,
+		},
+		{
+			Name:  "session-update-cue",
+			Usage: "Manually edit one cue's text and/or speed, or skip/un-skip it",
+			Flags: append([]console.Flag{
+				&console.IntFlag{Name: "index", Usage: "1-based cue index to edit"},
+				&console.StringFlag{Name: "text", Usage: "New spoken text for the cue"},
+				&console.Float64Flag{Name: "speed", Usage: "New speed override for the cue"},
+				&console.BoolFlag{Name: "skip", Usage: "Accept this cue as-is, excluding it from flagged/basket counts and Reduce; --skip=false un-skips it"},
+			}, sessionWorkDirFlags()...),
+			Action: runSessionUpdateCue,
+		},
+		{
+			Name:   "session-show",
+			Usage:  "Print the active session's current state",
+			Flags:  sessionWorkDirFlags(),
+			Action: runSessionShow,
+		},
+		{
+			Name:   "session-reset",
+			Usage:  "Clear the active session",
+			Flags:  sessionWorkDirFlags(),
+			Action: runSessionReset,
+		},
+		{
+			Name:        "serve",
+			Usage:       "Run the HTTP API for the session workflow (upload/cleanup/generate/autofix/reduce/export)",
+			Description: "Route-for-route equivalent of dub-studio's app.py",
+			Flags: append([]console.Flag{
+				&console.StringFlag{
+					Name:         "addr",
+					Usage:        "Address to listen on",
+					DefaultValue: ":8080",
+				},
+				&console.StringFlag{
+					Name:  "static-dir",
+					Usage: "Directory containing an index.html (and any other static assets) to serve at / and /static/ instead of the built-in embedded frontend; only useful for iterating on the frontend locally without a rebuild",
+				},
+				&console.StringFlag{
+					Name:  "autofix-config",
+					Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps}); built-in defaults are used if omitted",
+				},
+			}, append(sessionWorkDirFlags(), append(sessionGenerationFlags(), reduceFlags()...)...)...),
+			Action: runServe,
+		},
+	}
+}
+
+// sessionWorkDirFlags are common to every session-* command: where the
+// session lives, and the tolerance used both to gate same-voice overlaps
+// at Generate/Export time and to decide whether a cue counts as "flagged"
+// in any session summary -- dub-studio's core.py treats these as literally
+// the same constant (TOLERANCE_MS = config.OVERLAP_TOLERANCE_MS).
+func sessionWorkDirFlags() []console.Flag {
+	return []console.Flag{
+		&console.StringFlag{
+			Name:         "work-dir",
+			Usage:        "Directory holding this session's state, working VTT, and exported audio",
+			DefaultValue: ".",
+		},
+		&console.IntFlag{
+			Name:         "overlap-tolerance-ms",
+			Aliases:      []string{"t"},
+			Usage:        "Allow same-voice overlaps up to this many ms; also the threshold for a cue counting as \"flagged\"",
+			DefaultValue: 120,
+		},
+	}
+}
+
+// sessionGenerationFlags mirror dub-studio's config.py defaults
+// (MERGE_THRESHOLD_MS, MERGE_MAX_MS) as out-of-the-box behavior for
+// session-generate/session-export, on top of sessionWorkDirFlags.
+func sessionGenerationFlags() []console.Flag {
+	return []console.Flag{
+		&console.IntFlag{
+			Name:         "merge-lines-threshold-ms",
+			Aliases:      []string{"m"},
+			Usage:        "Merge lines if same speaker and gap is below this threshold (ms)",
+			DefaultValue: 120,
+		},
+		&console.IntFlag{
+			Name:         "merge-max-ms",
+			Usage:        "Cap a merged cue's total window to this many ms (0 = unlimited)",
+			DefaultValue: 6300,
+		},
+		&console.IntFlag{
+			Name:         "normalize-target-db",
+			Usage:        "Gain each cue toward this target RMS before mixing (0 or above disables)",
+			DefaultValue: -20,
+		},
+		&console.IntFlag{
+			Name:         "run-cap",
+			Usage:        "Refuse to Generate past this many runs for the session (0 = unlimited)",
+			DefaultValue: 10,
+		},
+	}
+}
+
+// reduceFlags configure the AI line-shortening step (see reduce.go).
+// --anthropic-api-key falls back to the ANTHROPIC_API_KEY environment
+// variable, mirroring dub-studio's config.py (a real Anthropic key, billed
+// separately from ElevenLabs -- never printed or logged).
+func reduceFlags() []console.Flag {
+	return []console.Flag{
+		&console.StringFlag{
+			Name:    "anthropic-api-key",
+			Usage:   "Anthropic API key for the AI line-shortening step; required only when /reduce or session-reduce is actually used",
+			EnvVars: []string{"ANTHROPIC_API_KEY"},
+		},
+		&console.StringFlag{
+			Name:         "reduce-model",
+			Usage:        "Anthropic model used for AI line-shortening",
+			DefaultValue: defaultReduceModel,
+		},
 	}
 }
 
