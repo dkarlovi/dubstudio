@@ -21,6 +21,8 @@ type SessionCue struct {
 	OverlapFlagged     bool    `json:"overlap_flagged"`
 	NeedsHuman         bool    `json:"needs_human"`
 	HumanReason        string  `json:"human_reason"`
+	AiSuggestion       string  `json:"ai_suggestion"` // Claude's declined-but-attempted draft, see ReduceText
+	AiNote             string  `json:"ai_note"`       // Claude's reason for declining, or "" once cleared
 }
 
 func (c *SessionCue) WindowMs() int { return c.EndMs - c.StartMs }

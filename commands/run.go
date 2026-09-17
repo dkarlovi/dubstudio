@@ -207,6 +207,12 @@ func All() []*console.Command {
 			Action: runSessionAutoFix,
 		},
 		{
+			Name:   "session-reduce",
+			Usage:  "Let Claude draft a shortened version of every basketed cue",
+			Flags:  append(sessionWorkDirFlags(), reduceFlags()...),
+			Action: runSessionReduce,
+		},
+		{
 			Name:   "session-export",
 			Usage:  "Export the active session's final mixed WAV",
 			Flags:  append(sessionWorkDirFlags(), sessionGenerationFlags()...),
@@ -236,8 +242,8 @@ func All() []*console.Command {
 		},
 		{
 			Name:        "serve",
-			Usage:       "Run the HTTP API for the session workflow (upload/cleanup/generate/autofix/export)",
-			Description: "Route-for-route equivalent of dub-studio's app.py, minus /reduce (an LLM call, out of scope for this migration)",
+			Usage:       "Run the HTTP API for the session workflow (upload/cleanup/generate/autofix/reduce/export)",
+			Description: "Route-for-route equivalent of dub-studio's app.py",
 			Flags: append([]console.Flag{
 				&console.StringFlag{
 					Name:         "addr",
@@ -252,7 +258,7 @@ func All() []*console.Command {
 					Name:  "autofix-config",
 					Usage: "Path to a JSON object ({tolerance_ms,autofix_margin_ms,speed_caps}); built-in defaults are used if omitted",
 				},
-			}, append(sessionWorkDirFlags(), sessionGenerationFlags()...)...),
+			}, append(sessionWorkDirFlags(), append(sessionGenerationFlags(), reduceFlags()...)...)...),
 			Action: runServe,
 		},
 	}
@@ -304,6 +310,25 @@ func sessionGenerationFlags() []console.Flag {
 			Name:         "run-cap",
 			Usage:        "Refuse to Generate past this many runs for the session (0 = unlimited)",
 			DefaultValue: 10,
+		},
+	}
+}
+
+// reduceFlags configure the AI line-shortening step (see reduce.go).
+// --anthropic-api-key falls back to the ANTHROPIC_API_KEY environment
+// variable, mirroring dub-studio's config.py (a real Anthropic key, billed
+// separately from ElevenLabs -- never printed or logged).
+func reduceFlags() []console.Flag {
+	return []console.Flag{
+		&console.StringFlag{
+			Name:    "anthropic-api-key",
+			Usage:   "Anthropic API key for the AI line-shortening step; required only when /reduce or session-reduce is actually used",
+			EnvVars: []string{"ANTHROPIC_API_KEY"},
+		},
+		&console.StringFlag{
+			Name:         "reduce-model",
+			Usage:        "Anthropic model used for AI line-shortening",
+			DefaultValue: defaultReduceModel,
 		},
 	}
 }

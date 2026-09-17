@@ -83,6 +83,36 @@ func TestLocalService_UpdateCue(t *testing.T) {
 	})
 }
 
+func TestLocalService_Reduce(t *testing.T) {
+	t.Run("missing API key and no injected client is a clear error, not a network attempt", func(t *testing.T) {
+		s := &Session{Cues: []*SessionCue{{Index: 1, NeedsHuman: true, CurrentText: "x"}}}
+		ls := NewLocalService(testServiceConfig())
+
+		if _, err := ls.Reduce(s); err == nil {
+			t.Fatal("want an error when Reduce.APIKey and Reduce.Client are both unset")
+		}
+	})
+
+	t.Run("an injected client is used even with no API key, for testability", func(t *testing.T) {
+		s := &Session{Cues: []*SessionCue{
+			{Index: 1, StartMs: 0, EndMs: 2000, Voice: "hana", CurrentText: "too long", NeedsHuman: true},
+		}}
+		cfg := testServiceConfig()
+		cfg.Reduce.Client = &fakeAnthropicClient{results: []LineShortenResult{
+			{Action: "shorten", Text: "short", Reason: ""},
+		}}
+		ls := NewLocalService(cfg)
+
+		result, err := ls.Reduce(s)
+		if err != nil {
+			t.Fatalf("Reduce() error: %v", err)
+		}
+		if len(result.Shortened) != 1 || s.Cues[0].CurrentText != "short" {
+			t.Errorf("result = %+v, cue = %+v", result, s.Cues[0])
+		}
+	})
+}
+
 func TestBuildExportResult(t *testing.T) {
 	t.Run("an overlap blocks export", func(t *testing.T) {
 		_, err := buildExportResult(nil, []cueOverlap{{First: 0, Second: 1}})

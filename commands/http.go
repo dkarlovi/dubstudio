@@ -19,8 +19,7 @@ import (
 // it depends only on those interfaces, not on LocalService/FileSessionStore
 // concretely, so a different implementation of either can be swapped in
 // without this file changing. Mirrors dub-studio's app.py route-for-route
-// (see that file's own docstring), except /reduce (AI-assisted line
-// shortening): that's an LLM call, out of scope for this migration.
+// (see that file's own docstring), now including /reduce.
 //
 // Like app.py, this holds a single global session in memory (not
 // multi-tenant), persisted through store after every mutating call.
@@ -57,6 +56,7 @@ func (h *httpServer) mux() *http.ServeMux {
 	mux.HandleFunc("POST /cleanup", h.handleCleanup)
 	mux.HandleFunc("POST /generate", h.handleGenerate)
 	mux.HandleFunc("POST /autofix", h.handleAutoFix)
+	mux.HandleFunc("POST /reduce", h.handleReduce)
 	mux.HandleFunc("POST /cue/{index}", h.handleUpdateCue)
 	mux.HandleFunc("POST /export", h.handleExport)
 	mux.HandleFunc("GET /export/download", h.handleExportDownload)
@@ -213,6 +213,26 @@ func (h *httpServer) handleAutoFix(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (h *httpServer) handleReduce(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.requireSession(w) {
+		return
+	}
+
+	result, err := h.service.Reduce(h.session)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.save(w) {
+		return
+	}
+	out := sessionDTO(h.session, h.toleranceMs, h.runCap)
+	out["last_reduce"] = result
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *httpServer) handleExport(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -321,9 +341,8 @@ func indices(cues []*SessionCue) []int {
 // studio's existing frontend (static/index.html) expects: a lowercase
 // voice name (that UI is hardcoded to the matko/hana pair), and derived
 // flagged/est_flagged/dirty fields dub-studio's own core.Cue exposes as
-// properties. est_flagged/est_overage_ms/ai_suggestion/ai_note are always
-// zero-valued -- this Go service has no mock/estimate mode and no AI
-// line-shortening pass.
+// properties. est_flagged/est_overage_ms are always zero-valued -- this Go
+// service has no mock/estimate mode.
 func cueDTO(c *SessionCue, toleranceMs int) map[string]any {
 	overageMs := c.OverageMs()
 	flagged := c.AudioMs != nil && overageMs > toleranceMs
@@ -341,8 +360,8 @@ func cueDTO(c *SessionCue, toleranceMs int) map[string]any {
 		"overlap_flagged": c.OverlapFlagged,
 		"needs_human":     c.NeedsHuman,
 		"human_reason":    c.HumanReason,
-		"ai_suggestion":   "",
-		"ai_note":         "",
+		"ai_suggestion":   c.AiSuggestion,
+		"ai_note":         c.AiNote,
 		"window_ms":       c.WindowMs(),
 		"overage_ms":      overageMs,
 		"est_overage_ms":  0,

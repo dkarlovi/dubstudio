@@ -29,6 +29,10 @@ func sessionServiceConfig(c *console.Context, engine *Config) ServiceConfig {
 		OverlapToleranceMs: c.Int("overlap-tolerance-ms"),
 		NormalizeTargetDb:  c.Int("normalize-target-db"),
 		RunCap:             c.Int("run-cap"),
+		Reduce: ReduceServiceConfig{
+			APIKey: c.String("anthropic-api-key"),
+			Model:  c.String("reduce-model"),
+		},
 	}
 }
 
@@ -177,6 +181,29 @@ func runSessionAutoFix(c *console.Context) error {
 	}
 	out := sessionSummary(session, c.Int("overlap-tolerance-ms"))
 	out["last_autofix"] = result
+	return printJSON(c, out)
+}
+
+func runSessionReduce(c *console.Context) error {
+	store := sessionStore(c)
+	session, err := loadActiveSession(store)
+	if err != nil {
+		return console.Exit(err.Error(), 1)
+	}
+
+	ls := NewLocalService(ServiceConfig{Reduce: ReduceServiceConfig{
+		APIKey: c.String("anthropic-api-key"),
+		Model:  c.String("reduce-model"),
+	}})
+	result, err := ls.Reduce(session)
+	if err != nil {
+		return console.Exit(fmt.Sprintf("Error reducing: %v", err), 1)
+	}
+	if err := store.Save(session); err != nil {
+		return console.Exit(fmt.Sprintf("Error saving session: %v", err), 1)
+	}
+	out := sessionSummary(session, c.Int("overlap-tolerance-ms"))
+	out["last_reduce"] = result
 	return printJSON(c, out)
 }
 

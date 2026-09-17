@@ -23,6 +23,17 @@ type ServiceConfig struct {
 	NormalizeTargetDb  int
 	AutoFix            AutoFixConfig
 	RunCap             int // 0 = unlimited
+	Reduce             ReduceServiceConfig
+}
+
+// ReduceServiceConfig configures the AI line-shortening step (see reduce.go)
+// -- a separate Anthropic spend, not gated by RunCap. Client, when set,
+// overrides APIKey/Model entirely (a test double); LocalService.Reduce
+// constructs a real anthropicHTTPClient from APIKey/Model otherwise.
+type ReduceServiceConfig struct {
+	APIKey string
+	Model  string
+	Client AnthropicClient
 }
 
 // ExportResult reports the outcome of an Export call, mirroring dub-studio's
@@ -45,6 +56,7 @@ type Service interface {
 	Cleanup(s *Session) []CueEdit
 	Generate(s *Session) (GenerateResult, error)
 	AutoFix(s *Session) AutoFixResult
+	Reduce(s *Session) (ReduceResult, error)
 	Export(s *Session) (ExportResult, error)
 	UpdateCue(s *Session, index int, text *string, speed *float64) (*SessionCue, error)
 }
@@ -163,6 +175,22 @@ func (ls *LocalService) AutoFix(s *Session) AutoFixResult {
 	result := AutoFixDurations(afCues, ls.cfg.AutoFix)
 	applyAutoFixResults(s.Cues, afCues)
 	return result
+}
+
+// Reduce runs the AI line-shortening pass (see reduce.go) over every
+// basketed cue. Mirrors dub-studio's app.py POST /reduce: a missing API key
+// is the one error case that surfaces to the caller (a per-cue AI failure
+// during ReduceText itself is reported as a decline, not an error here).
+func (ls *LocalService) Reduce(s *Session) (ReduceResult, error) {
+	client := ls.cfg.Reduce.Client
+	if client == nil {
+		if ls.cfg.Reduce.APIKey == "" {
+			return ReduceResult{}, fmt.Errorf(
+				"ANTHROPIC_API_KEY is not set. Get a key at console.anthropic.com and set it in the environment -- this is a separate account from ElevenLabs, and separate from any claude.ai or Claude Code plan.")
+		}
+		client = newAnthropicClient(ls.cfg.Reduce.APIKey, ls.cfg.Reduce.Model)
+	}
+	return ReduceText(s.Cues, client), nil
 }
 
 // buildExportResult decides whether a same-speaker overlap blocks export,
