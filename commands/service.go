@@ -16,8 +16,14 @@ import (
 // engine's config.yaml (auth key, voice models) -- tolerance/margin/speed
 // caps, merge/overlap knobs, and where a session's working files live.
 type ServiceConfig struct {
-	Engine             *Config
-	WorkDir            string
+	Engine  *Config
+	WorkDir string
+	// CacheDir is where the engine looks up and writes cached mp3 takes.
+	// Empty means the session vtt's own directory (i.e. WorkDir). serve
+	// sets it to one directory shared by every session, so a per-session
+	// WorkDir doesn't mean re-synthesizing identical lines for every new
+	// browser -- see parseSubtitleFile on why sharing is safe.
+	CacheDir           string
 	MergeThresholdMs   int
 	MergeMaxMs         int
 	OverlapToleranceMs int
@@ -105,7 +111,7 @@ func (ls *LocalService) writeAndParse(cues []*SessionCue) ([]Item, error) {
 	if err := os.WriteFile(vttPath, writeSessionVTT(cues, ls.cfg.Engine.Default.Name), 0o644); err != nil {
 		return nil, fmt.Errorf("writing session vtt: %w", err)
 	}
-	return parseSubtitleFile(ls.cfg.Engine, vttPath, ls.cfg.MergeThresholdMs, ls.cfg.MergeMaxMs), nil
+	return parseSubtitleFile(ls.cfg.Engine, vttPath, ls.cfg.MergeThresholdMs, ls.cfg.MergeMaxMs, ls.cfg.CacheDir), nil
 }
 
 func (ls *LocalService) elevenLabsClient() *elevenlabs.Client {

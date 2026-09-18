@@ -246,7 +246,7 @@ func sessionWorkDirFlags() []console.Flag {
 	return []console.Flag{
 		&console.StringFlag{
 			Name:         "work-dir",
-			Usage:        "Directory holding this session's state, working VTT, and exported audio",
+			Usage:        "Directory holding session state, working VTT, and exported audio; serve puts each browser session in a sessions/<id> subdirectory of it and shares one cache/ subdirectory across them",
 			DefaultValue: ".",
 		},
 		&console.IntFlag{
@@ -346,7 +346,7 @@ func Run(c *console.Context) error {
 		log.Printf("Normalization disabled")
 	}
 
-	items := parseSubtitleFile(config, path, threshold, mergeMaxMs)
+	items := parseSubtitleFile(config, path, threshold, mergeMaxMs, "")
 
 	client := elevenlabs.NewClient(context.Background(), config.AuthKey, 30*time.Second)
 	audioFiles := generateMissingVoiceLines(client, items)
@@ -579,7 +579,17 @@ func canMergeCue(curSpeaker, nextSpeaker string, mergedStart, mergedEnd, nextSta
 	return true
 }
 
-func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, mergeMaxMs int) []Item {
+// parseSubtitleFile parses path, resolves each cue's speaker/speed, merges
+// adjacent same-speaker cues, and computes each cue's cache path.
+//
+// cacheDir, when non-empty, is where cached mp3 takes are looked up and
+// written; empty means the subtitle file's own directory, which is the
+// engine's standalone behavior and what the run command passes. The
+// session/app layer overrides it so several per-session work directories
+// can share one cache -- the cache key is content-addressed
+// (md5(voiceID+ttsModel+speed+text), see generatePathTemplate), so a hit
+// written by one session is byte-identical to what another would generate.
+func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, mergeMaxMs int, cacheDir string) []Item {
 	subs, err := astisub.OpenFile(path)
 	if err != nil {
 		log.Fatalf("Error parsing VTT file: %v", err)
@@ -588,6 +598,9 @@ func parseSubtitleFile(config *Config, path string, mergeLinesThresholdMs, merge
 	modelChannels := generateModelChannelMap(config)
 	items := make([]Item, 0)
 	root, _ := filepath.Abs(filepath.Dir(path))
+	if cacheDir != "" {
+		root, _ = filepath.Abs(cacheDir)
+	}
 
 	// Merge logic
 	type mergedResult struct {
