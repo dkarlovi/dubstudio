@@ -180,7 +180,10 @@ func (ls *LocalService) generateOnce(s *Session) (generateRoundResult, error) {
 		return generateRoundResult{}, err
 	}
 
-	audioFiles := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	audioFiles, err := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	if err != nil {
+		return generateRoundResult{}, err
+	}
 
 	overlapTolerance := time.Duration(ls.cfg.OverlapToleranceMs) * time.Millisecond
 	overlapsByFirst, overlaps := annotateOverlaps(audioFiles, findOverlaps(audioFiles, overlapTolerance))
@@ -333,7 +336,10 @@ func (ls *LocalService) Export(s *Session) (ExportResult, error) {
 	if err != nil {
 		return ExportResult{}, err
 	}
-	audioFiles := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	audioFiles, err := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	if err != nil {
+		return ExportResult{}, err
+	}
 
 	overlapTolerance := time.Duration(ls.cfg.OverlapToleranceMs) * time.Millisecond
 	overlaps := findOverlaps(audioFiles, overlapTolerance)

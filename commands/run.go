@@ -349,7 +349,10 @@ func Run(c *console.Context) error {
 	items := parseSubtitleFile(config, path, threshold, mergeMaxMs, "")
 
 	client := elevenlabs.NewClient(context.Background(), config.AuthKey, 30*time.Second)
-	audioFiles := generateMissingVoiceLines(client, items)
+	audioFiles, err := generateMissingVoiceLines(client, items)
+	if err != nil {
+		return console.Exit(fmt.Sprintf("Error generating audio: %v", err), 1)
+	}
 
 	overlapsByFirst, overlaps := annotateOverlaps(audioFiles, findOverlaps(audioFiles, overlapTolerance))
 
@@ -755,13 +758,23 @@ func previousIdsFor(items []Item, item Item, want, lookback int) []string {
 	return ids
 }
 
-func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioFile {
+// generateMissingVoiceLines synthesizes every cue that isn't already
+// cached, measures each cue's real duration, and returns them in subtitle
+// order.
+//
+// Every failure is returned rather than fatal. This used to log.Fatal,
+// which was survivable for the run command (one process, one subtitle
+// file) but not for serve: one bad voice ID or one expired key took the
+// whole HTTP server down mid-request, for every session using it, without
+// writing a response. The TTS call itself is retried on transient
+// failures -- see withRetry and retryableTTSError.
+func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) ([]AudioFile, error) {
 	audioFiles := make([]AudioFile, 0)
 	for _, item := range items {
 		if item.Path.Path != "" {
 			duration, err := readAudioFileDuration(item.Path.Path)
 			if err != nil {
-				log.Fatalf("Error reading audio file %s duration: %v\n", item.Path.Path, err)
+				return nil, fmt.Errorf("reading cached audio %s duration: %w", item.Path.Path, err)
 			}
 			audioFiles = append(audioFiles, AudioFile{
 				Item:     item,
@@ -801,21 +814,27 @@ func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioF
 			NextText:           nextText,
 		}
 
-		speech, id, err := client.TextToSpeechWithRequestID(item.Model.model, ttsReq)
+		var speech []byte
+		var id string
+		err := withRetry(defaultTTSRetryPolicy(), retryableTTSError, time.Sleep, func() error {
+			var callErr error
+			speech, id, callErr = client.TextToSpeechWithRequestID(item.Model.model, ttsReq)
+			return callErr
+		})
 		if err != nil {
-			log.Fatal(err)
+			return nil, fmt.Errorf("synthesizing cue #%d as %s: %w", item.Sub.Index+1, item.Model.name, err)
 		}
 
 		path := fmt.Sprintf(item.Path.Template, id)
 		if err := os.WriteFile(path, speech, 0644); err != nil {
-			log.Fatal(err)
+			return nil, fmt.Errorf("writing %s: %w", path, err)
 		}
 		log.Printf("Wrote %s\n", path)
 		item.Path.Path = path
 
 		duration, err := readAudioFileDuration(path)
 		if err != nil {
-			log.Fatalf("Error reading audio file %s duration: %v\n", item.Path.Path, err)
+			return nil, fmt.Errorf("reading audio file %s duration: %w", path, err)
 		}
 
 		audioFiles = append(audioFiles, AudioFile{
@@ -826,7 +845,7 @@ func generateMissingVoiceLines(client *elevenlabs.Client, items []Item) []AudioF
 		})
 	}
 
-	return audioFiles
+	return audioFiles, nil
 }
 
 func readAudioFileDuration(path string) (time.Duration, error) {
