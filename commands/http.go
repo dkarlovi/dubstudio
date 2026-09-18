@@ -677,7 +677,7 @@ func runServe(c *console.Context) error {
 	fmt.Fprintf(c.App.Writer, "Listening on %s (work-dir=%s)\n", addr, svcCfg.WorkDir)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server.mux(),
+		Handler:           loggingMiddleware(server.mux()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	if err := srv.ListenAndServe(); err != nil {
