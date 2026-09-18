@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -360,7 +361,7 @@ func (h *httpServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	result, err := t.service.Generate(t.session)
 	if err != nil {
-		writeError(w, http.StatusTooManyRequests, err.Error())
+		writeError(w, generateErrorStatus(err), err.Error())
 		return
 	}
 	if !t.save(w) {
@@ -431,7 +432,7 @@ func (h *httpServer) handleExport(w http.ResponseWriter, r *http.Request) {
 
 	result, err := t.service.Export(t.session)
 	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
+		writeError(w, exportErrorStatus(err), err.Error())
 		return
 	}
 	if !t.save(w) {
@@ -526,6 +527,33 @@ func (h *httpServer) handleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// generateErrorStatus and exportErrorStatus separate "the caller has more
+// to do" from "something failed underneath us".
+//
+// Both handlers used to return one fixed status for every failure --
+// Generate always 429, Export always 409 -- which was accurate only while
+// the only reachable failure was the caller's own quota or unresolved
+// overlaps. Since generateMissingVoiceLines returns its errors instead of
+// killing the process, an ElevenLabs outage or a bad voice ID reaches
+// here too, and reporting that as 429 would drive the frontend's
+// 429-specific branch (index.html's call(): a sticky "you've used all
+// your runs" toast plus a refresh) to say something false about an
+// upstream failure. 502 falls through to its generic !r.ok branch, which
+// toasts whatever is in detail -- so no frontend change is needed.
+func generateErrorStatus(err error) int {
+	if errors.Is(err, ErrRunCapReached) {
+		return http.StatusTooManyRequests
+	}
+	return http.StatusBadGateway
+}
+
+func exportErrorStatus(err error) int {
+	if errors.Is(err, ErrExportBlocked) {
+		return http.StatusConflict
+	}
+	return http.StatusBadGateway
 }
 
 func indices(cues []*SessionCue) []int {

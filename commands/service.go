@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -10,6 +11,23 @@ import (
 	"time"
 
 	"github.com/haguro/elevenlabs-go"
+)
+
+// Sentinel errors the HTTP layer classifies on. Generate and Export can
+// each fail for two quite different reasons -- the caller has spent a
+// quota or hasn't finished the work yet, versus ElevenLabs or the disk
+// failing underneath us -- and those need different status codes. Matching
+// on message text would be brittle, so the two caller-fault cases get
+// sentinels and everything else is treated as upstream.
+var (
+	// ErrRunCapReached means the session has already spent its RunCap;
+	// no audio was generated and nothing was billed.
+	ErrRunCapReached = errors.New("run cap reached")
+
+	// ErrExportBlocked means the session isn't exportable yet -- cues
+	// still overlap past tolerance. Nothing is wrong with the service;
+	// the caller has more editing to do.
+	ErrExportBlocked = errors.New("export blocked")
 )
 
 // ServiceConfig is dub-studio's own app-level policy layered on top of the
@@ -253,7 +271,8 @@ func runConvergenceLoop(generate func() (generateRoundResult, error), autoFix fu
 func (ls *LocalService) Generate(s *Session) (GenerateResult, error) {
 	if ls.cfg.RunCap > 0 && s.RunCount >= ls.cfg.RunCap {
 		return GenerateResult{}, fmt.Errorf(
-			"run cap reached (%d generations for this video); no audio was generated, reset the session to continue", ls.cfg.RunCap)
+			"%w (%d generations for this video); no audio was generated, reset the session to continue",
+			ErrRunCapReached, ls.cfg.RunCap)
 	}
 
 	rounds, afResults, err := runConvergenceLoop(
@@ -311,7 +330,8 @@ func (ls *LocalService) Reduce(s *Session) (ReduceResult, error) {
 func buildExportResult(cues []*SessionCue, overlaps []cueOverlap) (ExportResult, error) {
 	if len(overlaps) > 0 {
 		return ExportResult{}, fmt.Errorf(
-			"export blocked: same-speaker cues still overlap past tolerance; fix or re-speed the flagged lines and Generate again first")
+			"%w: same-speaker cues still overlap past tolerance; fix or re-speed the flagged lines and Generate again first",
+			ErrExportBlocked)
 	}
 	stillOver := make([]int, 0)
 	basket := make([]int, 0)
