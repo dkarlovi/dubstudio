@@ -88,7 +88,7 @@ func TestParseSubtitleFile_MergeMaxMs(t *testing.T) {
 
 	t.Run("cap 7000ms splits into [1+2],[3]", func(t *testing.T) {
 		path := writeTempVTT(t, threeAbuttingSameVoiceCues)
-		items := parseSubtitleFile(cfg, path, 120, 7000)
+		items := parseSubtitleFile(cfg, path, 120, 7000, "")
 
 		if len(items) != 2 {
 			t.Fatalf("want 2 merged cues, got %d: %+v", len(items), items)
@@ -103,7 +103,7 @@ func TestParseSubtitleFile_MergeMaxMs(t *testing.T) {
 
 	t.Run("cap 0 is unlimited: all three merge", func(t *testing.T) {
 		path := writeTempVTT(t, threeAbuttingSameVoiceCues)
-		items := parseSubtitleFile(cfg, path, 120, 0)
+		items := parseSubtitleFile(cfg, path, 120, 0, "")
 
 		if len(items) != 1 {
 			t.Fatalf("want 1 merged cue, got %d: %+v", len(items), items)
@@ -128,7 +128,7 @@ one
 three
 `
 		path := writeTempVTT(t, vtt)
-		items := parseSubtitleFile(cfg, path, 120, 0)
+		items := parseSubtitleFile(cfg, path, 120, 0, "")
 
 		if len(items) != 3 {
 			t.Fatalf("want 3 separate cues (Hana/Matko/Hana never merges across Matko), got %d: %+v", len(items), items)
@@ -386,7 +386,7 @@ func TestParseSubtitleFile_MergeStripsEachLinesOwnSpeakerTag(t *testing.T) {
 [Matko] three
 `
 	path := writeTempVTT(t, vtt)
-	items := parseSubtitleFile(testConfig(), path, 120, 0)
+	items := parseSubtitleFile(testConfig(), path, 120, 0, "")
 
 	if len(items) != 1 {
 		t.Fatalf("want 1 merged cue, got %d: %+v", len(items), items)

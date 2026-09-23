@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -12,12 +13,35 @@ import (
 	"github.com/haguro/elevenlabs-go"
 )
 
+// Sentinel errors the HTTP layer classifies on. Generate and Export can
+// each fail for two quite different reasons -- the caller has spent a
+// quota or hasn't finished the work yet, versus ElevenLabs or the disk
+// failing underneath us -- and those need different status codes. Matching
+// on message text would be brittle, so the two caller-fault cases get
+// sentinels and everything else is treated as upstream.
+var (
+	// ErrRunCapReached means the session has already spent its RunCap;
+	// no audio was generated and nothing was billed.
+	ErrRunCapReached = errors.New("run cap reached")
+
+	// ErrExportBlocked means the session isn't exportable yet -- cues
+	// still overlap past tolerance. Nothing is wrong with the service;
+	// the caller has more editing to do.
+	ErrExportBlocked = errors.New("export blocked")
+)
+
 // ServiceConfig is dub-studio's own app-level policy layered on top of the
 // engine's config.yaml (auth key, voice models) -- tolerance/margin/speed
 // caps, merge/overlap knobs, and where a session's working files live.
 type ServiceConfig struct {
-	Engine             *Config
-	WorkDir            string
+	Engine  *Config
+	WorkDir string
+	// CacheDir is where the engine looks up and writes cached mp3 takes.
+	// Empty means the session vtt's own directory (i.e. WorkDir). serve
+	// sets it to one directory shared by every session, so a per-session
+	// WorkDir doesn't mean re-synthesizing identical lines for every new
+	// browser -- see parseSubtitleFile on why sharing is safe.
+	CacheDir           string
 	MergeThresholdMs   int
 	MergeMaxMs         int
 	OverlapToleranceMs int
@@ -105,7 +129,7 @@ func (ls *LocalService) writeAndParse(cues []*SessionCue) ([]Item, error) {
 	if err := os.WriteFile(vttPath, writeSessionVTT(cues, ls.cfg.Engine.Default.Name), 0o644); err != nil {
 		return nil, fmt.Errorf("writing session vtt: %w", err)
 	}
-	return parseSubtitleFile(ls.cfg.Engine, vttPath, ls.cfg.MergeThresholdMs, ls.cfg.MergeMaxMs), nil
+	return parseSubtitleFile(ls.cfg.Engine, vttPath, ls.cfg.MergeThresholdMs, ls.cfg.MergeMaxMs, ls.cfg.CacheDir), nil
 }
 
 func (ls *LocalService) elevenLabsClient() *elevenlabs.Client {
@@ -174,7 +198,10 @@ func (ls *LocalService) generateOnce(s *Session) (generateRoundResult, error) {
 		return generateRoundResult{}, err
 	}
 
-	audioFiles := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	audioFiles, err := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	if err != nil {
+		return generateRoundResult{}, err
+	}
 
 	overlapTolerance := time.Duration(ls.cfg.OverlapToleranceMs) * time.Millisecond
 	overlapsByFirst, overlaps := annotateOverlaps(audioFiles, findOverlaps(audioFiles, overlapTolerance))
@@ -244,7 +271,8 @@ func runConvergenceLoop(generate func() (generateRoundResult, error), autoFix fu
 func (ls *LocalService) Generate(s *Session) (GenerateResult, error) {
 	if ls.cfg.RunCap > 0 && s.RunCount >= ls.cfg.RunCap {
 		return GenerateResult{}, fmt.Errorf(
-			"run cap reached (%d generations for this video); no audio was generated, reset the session to continue", ls.cfg.RunCap)
+			"%w (%d generations for this video); no audio was generated, reset the session to continue",
+			ErrRunCapReached, ls.cfg.RunCap)
 	}
 
 	rounds, afResults, err := runConvergenceLoop(
@@ -302,7 +330,8 @@ func (ls *LocalService) Reduce(s *Session) (ReduceResult, error) {
 func buildExportResult(cues []*SessionCue, overlaps []cueOverlap) (ExportResult, error) {
 	if len(overlaps) > 0 {
 		return ExportResult{}, fmt.Errorf(
-			"export blocked: same-speaker cues still overlap past tolerance; fix or re-speed the flagged lines and Generate again first")
+			"%w: same-speaker cues still overlap past tolerance; fix or re-speed the flagged lines and Generate again first",
+			ErrExportBlocked)
 	}
 	stillOver := make([]int, 0)
 	basket := make([]int, 0)
@@ -327,7 +356,10 @@ func (ls *LocalService) Export(s *Session) (ExportResult, error) {
 	if err != nil {
 		return ExportResult{}, err
 	}
-	audioFiles := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	audioFiles, err := generateMissingVoiceLines(ls.elevenLabsClient(), items)
+	if err != nil {
+		return ExportResult{}, err
+	}
 
 	overlapTolerance := time.Duration(ls.cfg.OverlapToleranceMs) * time.Millisecond
 	overlaps := findOverlaps(audioFiles, overlapTolerance)

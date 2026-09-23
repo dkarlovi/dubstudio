@@ -1,7 +1,10 @@
 package commands
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,37 +24,179 @@ import (
 // without this file changing. Mirrors dub-studio's app.py route-for-route
 // (see that file's own docstring), now including /reduce.
 //
-// Like app.py, this holds a single global session in memory (not
-// multi-tenant), persisted through store after every mutating call.
+// Unlike app.py, this is not single-tenant: each browser gets its own
+// session, service and store, keyed by an opaque id in an HttpOnly cookie
+// (see resolveTenant). Everything a tenant writes -- session.json, the
+// session vtt, the exported wav -- lives under its own work directory, so
+// two people hitting one serve process no longer share session state and
+// overwrite each other's output. The mp3 cache is deliberately the one
+// thing they still share; see localTenantFunc.
 //
 // The frontend itself is embedded (embeddedIndexHTML, see webassets.go) so
 // this binary is fully self-contained and needs no ~/dub-studio checkout at
 // runtime; staticDir, when set, overrides that with a directory on disk --
 // only useful for iterating on the frontend locally without a rebuild.
 type httpServer struct {
+	// mu guards tenants only. Session state is locked per tenant, so one
+	// browser's Generate -- minutes of ElevenLabs round trips, holding
+	// its tenant lock the whole way -- doesn't block anyone else.
 	mu      sync.Mutex
-	session *Session
+	tenants map[string]*tenant
 
-	service     Service
-	store       SessionStore
+	// newTenant builds the state for a session id on first contact. A
+	// field rather than a method so tests can inject a fake service
+	// without a config or a real work directory.
+	newTenant newTenantFunc
+
 	staticDir   string
 	runCap      int
 	toleranceMs int
 }
 
-func newHTTPServer(service Service, store SessionStore, staticDir string, runCap, toleranceMs int) (*httpServer, error) {
-	session, err := store.Load()
-	if err != nil {
-		return nil, fmt.Errorf("loading session: %w", err)
+// tenant is one browser's isolated slice of server state. mu guards
+// session against concurrent requests from that same browser.
+type tenant struct {
+	mu      sync.Mutex
+	id      string
+	session *Session
+	service Service
+	store   SessionStore
+}
+
+type newTenantFunc func(id string) (*tenant, error)
+
+// localTenantFunc builds the real on-disk tenant for a session id:
+// baseCfg with WorkDir moved down into <work-dir>/sessions/<id>, and the
+// session file store alongside it. Since the session vtt, the mp3 cache
+// and the exported wav all derive from WorkDir, rewriting that one field
+// scopes all of them per session.
+//
+// All but the cache, that is: CacheDir is pinned to <work-dir>/cache, one
+// directory shared by every tenant, on purpose. The engine's cache key is
+// content-addressed -- md5(voiceID+ttsModel+speed+text), see
+// generatePathTemplate -- so a take cached by one session is byte-identical
+// to what any other session would synthesize for the same line by the same
+// voice. Scoping the cache per session would mean every new cookie
+// re-synthesizes the entire video from scratch.
+func localTenantFunc(baseCfg ServiceConfig) newTenantFunc {
+	root := baseCfg.WorkDir
+	return func(id string) (*tenant, error) {
+		cfg := baseCfg
+		cfg.WorkDir = filepath.Join(root, "sessions", id)
+		if cfg.CacheDir == "" {
+			cfg.CacheDir = filepath.Join(root, "cache")
+		}
+		// Both are directories this process invents, so nothing else
+		// has created them; the engine and the store only ever write
+		// individual files into them.
+		for _, dir := range []string{cfg.WorkDir, cfg.CacheDir} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, fmt.Errorf("creating %s: %w", dir, err)
+			}
+		}
+		store := &FileSessionStore{Dir: cfg.WorkDir}
+		session, err := store.Load()
+		if err != nil {
+			return nil, fmt.Errorf("loading session: %w", err)
+		}
+		return &tenant{
+			id:      id,
+			session: session,
+			service: NewLocalService(cfg),
+			store:   store,
+		}, nil
 	}
+}
+
+func newHTTPServer(newTenant newTenantFunc, staticDir string, runCap, toleranceMs int) *httpServer {
 	return &httpServer{
-		session:     session,
-		service:     service,
-		store:       store,
+		tenants:     map[string]*tenant{},
+		newTenant:   newTenant,
 		staticDir:   staticDir,
 		runCap:      runCap,
 		toleranceMs: toleranceMs,
-	}, nil
+	}
+}
+
+// sessionCookieName carries a browser's opaque session id. HttpOnly: the
+// frontend has no reason to read it, and doesn't need to -- every call in
+// index.html is a relative-URL fetch, which defaults to same-origin
+// credentials and so returns the cookie automatically. That's why
+// per-session state needed no frontend change at all.
+const sessionCookieName = "dubstudio_session"
+
+// newSessionID returns 16 crypto/rand bytes, hex encoded.
+func newSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating session id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// validSessionID gates a cookie value before it is ever used as a path
+// element. The id becomes a directory name under <work-dir>/sessions, and
+// the cookie is entirely client-controlled, so an unvalidated value is a
+// path traversal ("../../../etc") handed straight to MkdirAll. Accepts
+// only what newSessionID itself produces: exactly 32 lowercase hex
+// characters.
+func validSessionID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveTenant returns the calling browser's tenant, creating it and
+// issuing a cookie on first contact. A missing, malformed or unrecognized
+// cookie value is all the same thing: the caller gets a fresh id rather
+// than an error, so a stale cookie from an earlier serve process quietly
+// starts a new session instead of failing every request.
+//
+// Handlers must call this before writing any response body, because a
+// freshly issued cookie is a header and has to precede WriteHeader.
+func (h *httpServer) resolveTenant(w http.ResponseWriter, r *http.Request) (*tenant, bool) {
+	id := ""
+	if c, err := r.Cookie(sessionCookieName); err == nil && validSessionID(c.Value) {
+		id = c.Value
+	}
+	if id == "" {
+		var err error
+		if id, err = newSessionID(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return nil, false
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    id,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
+	// newTenant runs under h.mu so two concurrent first requests from one
+	// browser share a tenant rather than racing to build one each. It only
+	// does a couple of MkdirAlls and a session.json read, so holding the
+	// map lock across it costs nothing measurable.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if t, ok := h.tenants[id]; ok {
+		return t, true
+	}
+	t, err := h.newTenant(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	h.tenants[id] = t
+	return t, true
 }
 
 func (h *httpServer) mux() *http.ServeMux {
@@ -103,14 +248,22 @@ func (h *httpServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpServer) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	writeJSON(w, http.StatusOK, sessionDTO(h.session, h.toleranceMs, h.runCap))
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	writeJSON(w, http.StatusOK, sessionDTO(t.session, h.toleranceMs, h.runCap))
 }
 
 func (h *httpServer) handleUpload(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -132,7 +285,7 @@ func (h *httpServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	tmp.Close()
 
-	session, violations, err := h.service.Upload(header.Filename, tmp.Name())
+	session, violations, err := t.service.Upload(header.Filename, tmp.Name())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -150,25 +303,25 @@ func (h *httpServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.session = session
-	if !h.save(w) {
+	t.session = session
+	if !t.save(w) {
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionDTO(h.session, h.toleranceMs, h.runCap))
+	writeJSON(w, http.StatusOK, sessionDTO(t.session, h.toleranceMs, h.runCap))
 }
 
 // save persists the current session, writing a 500 and returning false on
 // failure so callers can bail out of their handler.
-func (h *httpServer) save(w http.ResponseWriter) bool {
-	if err := h.store.Save(h.session); err != nil {
+func (t *tenant) save(w http.ResponseWriter) bool {
+	if err := t.store.Save(t.session); err != nil {
 		writeError(w, http.StatusInternalServerError, "saving session: "+err.Error())
 		return false
 	}
 	return true
 }
 
-func (h *httpServer) requireSession(w http.ResponseWriter) bool {
-	if h.session == nil {
+func (t *tenant) requireSession(w http.ResponseWriter) bool {
+	if t.session == nil {
 		writeError(w, http.StatusBadRequest, "No active session.")
 		return false
 	}
@@ -176,112 +329,136 @@ func (h *httpServer) requireSession(w http.ResponseWriter) bool {
 }
 
 func (h *httpServer) handleCleanup(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.requireSession(w) {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.requireSession(w) {
 		return
 	}
 
-	edits := h.service.Cleanup(h.session)
-	if !h.save(w) {
+	edits := t.service.Cleanup(t.session)
+	if !t.save(w) {
 		return
 	}
-	out := sessionDTO(h.session, h.toleranceMs, h.runCap)
+	out := sessionDTO(t.session, h.toleranceMs, h.runCap)
 	out["last_cleanup"] = map[string]any{"cleanup": edits}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *httpServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.requireSession(w) {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.requireSession(w) {
 		return
 	}
 
-	result, err := h.service.Generate(h.session)
+	result, err := t.service.Generate(t.session)
 	if err != nil {
-		writeError(w, http.StatusTooManyRequests, err.Error())
+		writeError(w, generateErrorStatus(err), err.Error())
 		return
 	}
-	if !h.save(w) {
+	if !t.save(w) {
 		return
 	}
-	out := sessionDTO(h.session, h.toleranceMs, h.runCap)
+	out := sessionDTO(t.session, h.toleranceMs, h.runCap)
 	out["last_run"] = result
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *httpServer) handleAutoFix(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.requireSession(w) {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.requireSession(w) {
 		return
 	}
 
-	result := h.service.AutoFix(h.session)
-	if !h.save(w) {
+	result := t.service.AutoFix(t.session)
+	if !t.save(w) {
 		return
 	}
-	out := sessionDTO(h.session, h.toleranceMs, h.runCap)
+	out := sessionDTO(t.session, h.toleranceMs, h.runCap)
 	out["last_autofix"] = result
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *httpServer) handleReduce(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.requireSession(w) {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.requireSession(w) {
 		return
 	}
 
-	result, err := h.service.Reduce(h.session)
+	result, err := t.service.Reduce(t.session)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !h.save(w) {
+	if !t.save(w) {
 		return
 	}
-	out := sessionDTO(h.session, h.toleranceMs, h.runCap)
+	out := sessionDTO(t.session, h.toleranceMs, h.runCap)
 	out["last_reduce"] = result
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *httpServer) handleExport(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.requireSession(w) {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.requireSession(w) {
 		return
 	}
 
-	stillOver := h.session.Flagged(h.toleranceMs)
-	basket := h.session.Basket()
+	stillOver := t.session.Flagged(h.toleranceMs)
+	basket := t.session.Basket()
 
-	result, err := h.service.Export(h.session)
+	result, err := t.service.Export(t.session)
 	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
+		writeError(w, exportErrorStatus(err), err.Error())
 		return
 	}
-	if !h.save(w) {
+	if !t.save(w) {
 		return
 	}
 
 	manifest := map[string]any{
-		"video":             h.session.Name,
-		"cue_count":         len(h.session.Cues),
+		"video":             t.session.Name,
+		"cue_count":         len(t.session.Cues),
 		"still_over_budget": indices(stillOver),
 		"basket":            indices(basket),
 		"wav_path":          result.WavPath,
 	}
-	out := sessionDTO(h.session, h.toleranceMs, h.runCap)
+	out := sessionDTO(t.session, h.toleranceMs, h.runCap)
 	out["last_export"] = manifest
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *httpServer) handleExportDownload(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	session := h.session
-	h.mu.Unlock()
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	session := t.session
+	t.mu.Unlock()
 
 	if session == nil || session.ExportWavPath == "" {
 		writeError(w, http.StatusNotFound, "No exported audio yet.")
@@ -297,9 +474,13 @@ func (h *httpServer) handleExportDownload(w http.ResponseWriter, r *http.Request
 }
 
 func (h *httpServer) handleUpdateCue(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.requireSession(w) {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.requireSession(w) {
 		return
 	}
 
@@ -322,26 +503,57 @@ func (h *httpServer) handleUpdateCue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cue, err := h.service.UpdateCue(h.session, index, payload.Text, payload.Speed, payload.Skip)
+	cue, err := t.service.UpdateCue(t.session, index, payload.Text, payload.Speed, payload.Skip)
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("No cue #%d.", index))
 		return
 	}
-	if !h.save(w) {
+	if !t.save(w) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cueDTO(cue))
 }
 
 func (h *httpServer) handleReset(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.session = nil
-	if err := h.store.Reset(); err != nil {
+	t, ok := h.resolveTenant(w, r)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.session = nil
+	if err := t.store.Reset(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// generateErrorStatus and exportErrorStatus separate "the caller has more
+// to do" from "something failed underneath us".
+//
+// Both handlers used to return one fixed status for every failure --
+// Generate always 429, Export always 409 -- which was accurate only while
+// the only reachable failure was the caller's own quota or unresolved
+// overlaps. Since generateMissingVoiceLines returns its errors instead of
+// killing the process, an ElevenLabs outage or a bad voice ID reaches
+// here too, and reporting that as 429 would drive the frontend's
+// 429-specific branch (index.html's call(): a sticky "you've used all
+// your runs" toast plus a refresh) to say something false about an
+// upstream failure. 502 falls through to its generic !r.ok branch, which
+// toasts whatever is in detail -- so no frontend change is needed.
+func generateErrorStatus(err error) int {
+	if errors.Is(err, ErrRunCapReached) {
+		return http.StatusTooManyRequests
+	}
+	return http.StatusBadGateway
+}
+
+func exportErrorStatus(err error) int {
+	if errors.Is(err, ErrExportBlocked) {
+		return http.StatusConflict
+	}
+	return http.StatusBadGateway
 }
 
 func indices(cues []*SessionCue) []int {
@@ -455,19 +667,17 @@ func runServe(c *console.Context) error {
 
 	svcCfg := sessionServiceConfig(c, engine)
 	svcCfg.AutoFix = afCfg
-	service := NewLocalService(svcCfg)
-	store := sessionStore(c)
 
-	server, err := newHTTPServer(service, store, c.String("static-dir"), c.Int("run-cap"), c.Int("overlap-tolerance-ms"))
-	if err != nil {
-		return console.Exit(fmt.Sprintf("Error starting server: %v", err), 1)
-	}
+	// Per-session state is built lazily per browser, not once here: see
+	// localTenantFunc for how each session gets its own work directory
+	// while still sharing one mp3 cache.
+	server := newHTTPServer(localTenantFunc(svcCfg), c.String("static-dir"), c.Int("run-cap"), c.Int("overlap-tolerance-ms"))
 
 	addr := c.String("addr")
 	fmt.Fprintf(c.App.Writer, "Listening on %s (work-dir=%s)\n", addr, svcCfg.WorkDir)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server.mux(),
+		Handler:           loggingMiddleware(server.mux()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	if err := srv.ListenAndServe(); err != nil {

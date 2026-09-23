@@ -11,10 +11,7 @@ import (
 
 func TestHandleIndex(t *testing.T) {
 	t.Run("serves the embedded frontend by default, no static-dir needed", func(t *testing.T) {
-		h, err := newHTTPServer(nil, &FileSessionStore{Dir: t.TempDir()}, "", 0, 0)
-		if err != nil {
-			t.Fatalf("newHTTPServer error: %v", err)
-		}
+		h := newHTTPServer(localTenantFunc(ServiceConfig{WorkDir: t.TempDir()}), "", 0, 0)
 
 		w := httptest.NewRecorder()
 		h.mux().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -32,10 +29,7 @@ func TestHandleIndex(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<title>Local Dev Copy</title>"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		h, err := newHTTPServer(nil, &FileSessionStore{Dir: t.TempDir()}, dir, 0, 0)
-		if err != nil {
-			t.Fatalf("newHTTPServer error: %v", err)
-		}
+		h := newHTTPServer(localTenantFunc(ServiceConfig{WorkDir: t.TempDir()}), dir, 0, 0)
 
 		w := httptest.NewRecorder()
 		h.mux().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
