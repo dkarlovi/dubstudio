@@ -3,7 +3,7 @@ module github.com/dkarlovi/dubstudio
 go 1.23.0
 
 require (
-	github.com/asticode/go-astisub v0.44.0
+	github.com/asticode/go-astisub v0.45.0
 	github.com/go-audio/audio v1.0.0
 	github.com/go-audio/wav v1.1.0
 	github.com/haguro/elevenlabs-go v0.2.4
